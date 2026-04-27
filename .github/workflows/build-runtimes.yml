@@ -306,7 +306,9 @@ jobs:
               echo "::notice::cache HIT $name@${{ matrix.target }} — skipping rebuild"
             fi
           done
-          IFS=','; joined="${skipped[*]}"; unset IFS
+          # bash 4.x trips `set -u` on `${skipped[*]}` when the array is empty.
+          # Use the `+alt` parameter expansion to default to '' in that case.
+          IFS=','; joined="${skipped[*]+${skipped[*]}}"; unset IFS
           echo "list=$joined" >> "$GITHUB_OUTPUT"
           [[ -n "$joined" ]] && echo "Skipping (cached): $joined" || echo "No cached binaries — building all from source."
 
