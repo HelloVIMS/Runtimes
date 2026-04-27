@@ -2,7 +2,7 @@
 
 Pre-compiled, cross-platform binaries for the eight VIMS agent shells, keyed
 on each upstream project's commit SHA. Built daily on this public repo's
-free GitHub Actions minutes; consumed by [VIMS](https://github.com/AEyeOS/VIMS)
+free GitHub Actions minutes; consumed by [VIMS](https://vims.com)
 and anyone else who wants reproducible shell runtimes without a 90-minute
 cold compile.
 
@@ -64,7 +64,7 @@ gh release download openclaw-$SHA12 \
 
 ## Building
 
-The full build matrix runs on schedule (06:00 UTC daily) and on manual
+The full build matrix runs on schedule a weekly schedule and on manual
 dispatch. Per-shell SHA-keyed cache means re-runs against unchanged
 upstreams are near-instant.
 
@@ -84,5 +84,4 @@ of the specific shell you redistribute.
 
 These binaries are reproducible from the commit SHA referenced in the
 release tag. Build provenance is recorded in each release's notes (CI run
-URL + timestamp). For higher-assurance use, rebuild from source via
-[VIMS/scripts/update-runtimes.sh](https://github.com/AEyeOS/VIMS/blob/main/scripts/update-runtimes.sh).
+URL + timestamp). 
