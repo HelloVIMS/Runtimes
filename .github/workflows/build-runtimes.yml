@@ -66,7 +66,10 @@ jobs:
             os: windows-latest
             cross: 'false'
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 120
+    # 240 min: cold zeroclaw + openfang Rust workspaces alone burn ~75 min on
+    # 4-core runners; mirofish PyInstaller adds ~15-20 min. Free public CI has
+    # no per-minute cost so we can afford generous headroom on cold caches.
+    timeout-minutes: 240
 
     steps:
       - name: Checkout
