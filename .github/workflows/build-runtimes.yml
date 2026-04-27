@@ -348,10 +348,18 @@ jobs:
               echo "::notice::Cross-compiling for ${MATRIX_TARGET} from $(uname -sm)"
             fi
             chmod +x scripts/update-runtimes.sh
+            ec=0
             scripts/update-runtimes.sh ${args[@]+"${args[@]}"} || ec=$?
-            echo "[$(date -u +%H:%M:%SZ)] update-runtimes.sh exit=${ec:-0}"
-            [[ -n "${ec:-}" ]] && echo "::warning::update-runtimes.sh exited $ec — continuing to publish whatever shells did build"
+            echo "[$(date -u +%H:%M:%SZ)] update-runtimes.sh exit=${ec}"
+            if [[ "$ec" -ne 0 ]]; then
+              echo "::warning::update-runtimes.sh exited $ec — continuing to publish whatever shells did build"
+            fi
           } 2>&1 | tee -a "$BUILD_LOG"
+          # Avoid `[[ -n "$x" ]] && cmd` style here: when the test fails it
+          # returns 1, pipefail propagates that past tee, and GH's default
+          # `bash -eo pipefail` invocation kills the whole step even on a
+          # successful build. The `if/then/fi` form keeps the brace block
+          # exiting 0 cleanly.
           # Promote successfully-built binaries (incl. cache-restored) into dist/<target>/.
           mkdir -p "dist/${MATRIX_TARGET}"
           src="cmd/server/runtimes/binaries/${MATRIX_TARGET}"
