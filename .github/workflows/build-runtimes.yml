@@ -317,6 +317,13 @@ jobs:
 
       # update-runtimes.sh writes to cmd/server/runtimes/binaries/<target>/.
       # Move into a clean dist/ tree afterwards for upload simplicity.
+      #
+      # We `tee` ALL build output to a survivable log file written to the
+      # workspace, then upload it unconditionally as an artifact (see end of
+      # job). Free public `ubuntu-24.04-arm` runners are spot-class and can
+      # die mid-build with zero log traces returned via the standard agent
+      # channel — the artifact path bypasses that and gives us post-mortem
+      # visibility on otherwise-silent failures.
       - name: Build runtimes
         shell: bash
         env:
@@ -326,20 +333,25 @@ jobs:
           MATRIX_CROSS: ${{ matrix.cross }}
           SKIP_CACHED: ${{ steps.skip.outputs.list }}
         run: |
-          set -euo pipefail
-          args=()
-          [[ "${FRESH:-false}" == "true" ]] && args+=(--fresh)
-          [[ -n "${ONLY:-}" ]] && args+=(--only "$ONLY")
-          [[ -n "${SKIP_CACHED:-}" ]] && args+=(--skip "$SKIP_CACHED")
-          if [[ "${MATRIX_CROSS}" == "true" ]]; then
-            args+=(--target "${MATRIX_TARGET}")
-            echo "::notice::Cross-compiling for ${MATRIX_TARGET} from $(uname -sm)"
-          fi
-          chmod +x scripts/update-runtimes.sh
-          scripts/update-runtimes.sh ${args[@]+"${args[@]}"} || {
-            ec=$?
-            echo "::warning::update-runtimes.sh exited $ec — continuing to publish whatever shells did build"
-          }
+          set -uo pipefail
+          mkdir -p ci-logs
+          BUILD_LOG="ci-logs/build-${MATRIX_TARGET}.log"
+          : > "$BUILD_LOG"
+          {
+            echo "[$(date -u +%H:%M:%SZ)] target=${MATRIX_TARGET} host=$(uname -sm) free=$(df -h / | tail -1)"
+            args=()
+            [[ "${FRESH:-false}" == "true" ]] && args+=(--fresh)
+            [[ -n "${ONLY:-}" ]] && args+=(--only "$ONLY")
+            [[ -n "${SKIP_CACHED:-}" ]] && args+=(--skip "$SKIP_CACHED")
+            if [[ "${MATRIX_CROSS}" == "true" ]]; then
+              args+=(--target "${MATRIX_TARGET}")
+              echo "::notice::Cross-compiling for ${MATRIX_TARGET} from $(uname -sm)"
+            fi
+            chmod +x scripts/update-runtimes.sh
+            scripts/update-runtimes.sh ${args[@]+"${args[@]}"} || ec=$?
+            echo "[$(date -u +%H:%M:%SZ)] update-runtimes.sh exit=${ec:-0}"
+            [[ -n "${ec:-}" ]] && echo "::warning::update-runtimes.sh exited $ec — continuing to publish whatever shells did build"
+          } 2>&1 | tee -a "$BUILD_LOG"
           # Promote successfully-built binaries (incl. cache-restored) into dist/<target>/.
           mkdir -p "dist/${MATRIX_TARGET}"
           src="cmd/server/runtimes/binaries/${MATRIX_TARGET}"
@@ -421,3 +433,15 @@ jobs:
             fi
           done
           echo "Published $uploaded asset(s) for $TARGET"
+
+      # Always upload the build log as an artifact so silent runner deaths
+      # (esp. on `ubuntu-24.04-arm` spot capacity) leave us a post-mortem trail
+      # even when the agent's standard log-upload channel produces nothing.
+      - name: Upload build log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-log-${{ matrix.target }}
+          path: ci-logs/
+          if-no-files-found: ignore
+          retention-days: 14
