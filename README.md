@@ -1,8 +1,8 @@
 # VIMS Agent Shell Runtimes
 
 Pre-compiled, cross-platform binaries for the eight VIMS agent shells, keyed
-on each upstream project's commit SHA. Built daily on this public repo's
-free GitHub Actions minutes; consumed by [VIMS](https://vims.com)
+on each upstream project's commit SHA. Built weekly on this public repo's
+GitHub Actions; consumed by [VIMS](https://vims.com)
 and anyone else who wants reproducible shell runtimes without a 90-minute
 cold compile.
 
