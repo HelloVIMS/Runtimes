@@ -1,0 +1,418 @@
+name: Build Agent Shell Runtimes
+
+# Builds the 8 VIMS agent shell runtimes (openclaw, zeroclaw, nanoclaw,
+# nemoclaw, mirofish, picoclaw, hermes, openfang) cross-platform and
+# publishes each binary as a GitHub Release asset on THIS repo, keyed on
+# the upstream commit SHA. VIMS (private) downloads from these releases
+# instead of compiling — public-repo Actions minutes are free, so heavy
+# macOS / Rust / PyInstaller work happens here at no cost.
+#
+# Layout: one Release per `<shell>-<sha12>` containing one asset per
+# target platform: `<shell>-<target>[.exe]`. Idempotent across re-runs.
+#
+# Triggers:
+#   - schedule:           daily 06:00 UTC — picks up upstream commits
+#   - workflow_dispatch:  manual run from Actions tab
+#   - repository_dispatch type=build-runtimes  — invoked by VIMS pre-release
+
+on:
+  schedule:
+    - cron: '0 6 * * *'
+  workflow_dispatch:
+    inputs:
+      only:
+        description: 'Comma-separated shell names to build (default: all 8)'
+        required: false
+        default: ''
+      fresh:
+        description: 'Delete source trees before cloning (true/false)'
+        required: false
+        default: 'false'
+  repository_dispatch:
+    types: [build-runtimes]
+
+permissions:
+  contents: write       # needed for gh release create/upload
+
+env:
+  GO_VERSION: '1.25'
+  NODE_VERSION: '22'
+  PNPM_VERSION: '10'
+  BUN_VERSION: '1.3.11'
+  RUST_VERSION: 'stable'
+  PYTHON_VERSION: '3.12'
+  MACOSX_DEPLOYMENT_TARGET: '11.0'
+
+jobs:
+  build:
+    name: Build runtimes (${{ matrix.target }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: darwin-arm64
+            os: macos-14
+            cross: 'false'
+          - target: darwin-amd64
+            os: macos-14
+            cross: 'true'
+          - target: linux-amd64
+            os: ubuntu-latest
+            cross: 'false'
+          - target: linux-arm64
+            os: ubuntu-24.04-arm
+            cross: 'false'
+          - target: windows-amd64
+            os: windows-latest
+            cross: 'false'
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 120
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: true
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      - name: Install pnpm
+        run: npm install -g pnpm@${{ env.PNPM_VERSION }}
+
+      - name: Install Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: ${{ env.BUN_VERSION }}
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ env.RUST_VERSION }}
+
+      - name: Add Rust cross target (darwin-amd64)
+        if: matrix.target == 'darwin-amd64'
+        run: rustup target add x86_64-apple-darwin
+        shell: bash
+
+      - name: Install Rosetta 2 + x86_64 Python (darwin-amd64 cross)
+        if: matrix.target == 'darwin-amd64'
+        shell: bash
+        run: |
+          set -euxo pipefail
+          softwareupdate --install-rosetta --agree-to-license || true
+          arch -x86_64 uname -m
+          if [[ ! -x /usr/local/bin/brew ]]; then
+            arch -x86_64 /bin/bash -c \
+              'NONINTERACTIVE=1 /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"'
+          fi
+          arch -x86_64 /usr/local/bin/brew --version
+          set +e
+          arch -x86_64 /usr/local/bin/brew install python@3.11
+          BREW_EXIT=$?
+          set -e
+          if [[ $BREW_EXIT -ne 0 ]]; then
+            echo "::warning::brew install python@3.11 exited $BREW_EXIT (link conflict tolerated)"
+          fi
+          PY_PREFIX="$(arch -x86_64 /usr/local/bin/brew --prefix python@3.11 2>/dev/null || true)"
+          X86_PYTHON_PATH=""
+          for cand in \
+            "$PY_PREFIX/bin/python3.11" \
+            /usr/local/opt/python@3.11/bin/python3.11 \
+            "$(ls -td /usr/local/Cellar/python@3.11/*/bin/python3.11 2>/dev/null | head -1)"; do
+            if [[ -x "$cand" ]]; then X86_PYTHON_PATH="$cand"; break; fi
+          done
+          if [[ -z "$X86_PYTHON_PATH" ]]; then
+            echo "::error::could not locate x86_64 python3.11 keg binary"
+            ls -la /usr/local/Cellar/python@3.11/ || true
+            exit 1
+          fi
+          file "$X86_PYTHON_PATH"
+          arch -x86_64 "$X86_PYTHON_PATH" -c 'import platform; print("arch:", platform.machine(), "ver:", platform.python_version())'
+          echo "X86_PYTHON=$X86_PYTHON_PATH" >> "$GITHUB_ENV"
+
+      - name: Cache Rust builds (zeroclaw + openfang)
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: |
+            runtimes/zeroclaw
+            runtimes/openfang
+          key: ${{ matrix.target }}
+          shared-key: runtimes-${{ matrix.target }}
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Install uv (for mirofish)
+        if: matrix.target != 'windows-amd64'
+        run: curl -LsSf https://astral.sh/uv/install.sh | sh
+        shell: bash
+
+      - name: Install uv (Windows)
+        if: matrix.target == 'windows-amd64'
+        run: irm https://astral.sh/uv/install.ps1 | iex
+        shell: pwsh
+
+      - name: Install pipx (for hermes)
+        if: matrix.target != 'windows-amd64'
+        run: python -m pip install --user pipx
+        shell: bash
+
+      - name: Free disk space (linux)
+        if: runner.os == 'Linux'
+        run: |
+          df -h /
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc \
+                      /usr/local/share/boost /opt/hostedtoolcache/CodeQL \
+                      /usr/local/share/powershell /usr/share/swift \
+                      /usr/local/.ghcup /opt/microsoft 2>/dev/null || true
+          sudo docker image prune -af 2>/dev/null || true
+          sudo apt-get clean
+          df -h /
+        shell: bash
+
+      - name: Free disk space (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          df -h /
+          sudo rm -rf /Applications/Xcode_14*.app /Applications/Xcode_15.0*.app \
+                      /Applications/Xcode_15.1*.app /Applications/Xcode_15.2*.app \
+                      /Library/Developer/CoreSimulator/Profiles/Runtimes/* 2>/dev/null || true
+          df -h /
+        shell: bash
+
+      - name: Install system deps (linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            build-essential pkg-config libssl-dev \
+            libgtk-3-dev libwebkit2gtk-4.1-dev librsvg2-dev patchelf \
+            libayatana-appindicator3-dev
+        shell: bash
+
+      # =======================================================================
+      # Per-shell SHA-keyed binary cache (lives on this public repo).
+      # =======================================================================
+      - name: Resolve upstream shell SHAs
+        id: shas
+        shell: bash
+        run: |
+          chmod +x scripts/update-runtimes.sh
+          scripts/update-runtimes.sh --print-shas | tee /tmp/shell-shas.env
+          while IFS='=' read -r name sha; do
+            [[ -n "$name" ]] && echo "$name=$sha" >> "$GITHUB_OUTPUT"
+          done < /tmp/shell-shas.env
+
+      - name: Compute script+workflow hash
+        id: scripthash
+        shell: bash
+        run: |
+          h="${{ hashFiles('scripts/update-runtimes.sh', '.github/workflows/build-runtimes.yml') }}"
+          echo "h=$h" >> "$GITHUB_OUTPUT"
+
+      - name: Cache openclaw
+        id: cache-openclaw
+        uses: actions/cache@v4
+        with:
+          path: dist/${{ matrix.target }}/openclaw${{ matrix.target == 'windows-amd64' && '.exe' || '' }}
+          key: rt-${{ matrix.target }}-openclaw-${{ steps.shas.outputs.openclaw }}-${{ steps.scripthash.outputs.h }}
+
+      - name: Cache zeroclaw
+        id: cache-zeroclaw
+        uses: actions/cache@v4
+        with:
+          path: dist/${{ matrix.target }}/zeroclaw${{ matrix.target == 'windows-amd64' && '.exe' || '' }}
+          key: rt-${{ matrix.target }}-zeroclaw-${{ steps.shas.outputs.zeroclaw }}-${{ steps.scripthash.outputs.h }}
+
+      - name: Cache nanoclaw
+        id: cache-nanoclaw
+        uses: actions/cache@v4
+        with:
+          path: dist/${{ matrix.target }}/nanoclaw${{ matrix.target == 'windows-amd64' && '.exe' || '' }}
+          key: rt-${{ matrix.target }}-nanoclaw-${{ steps.shas.outputs.nanoclaw }}-${{ steps.scripthash.outputs.h }}
+
+      - name: Cache nemoclaw
+        id: cache-nemoclaw
+        uses: actions/cache@v4
+        with:
+          path: dist/${{ matrix.target }}/nemoclaw${{ matrix.target == 'windows-amd64' && '.exe' || '' }}
+          key: rt-${{ matrix.target }}-nemoclaw-${{ steps.shas.outputs.nemoclaw }}-${{ steps.scripthash.outputs.h }}
+
+      - name: Cache mirofish
+        id: cache-mirofish
+        uses: actions/cache@v4
+        with:
+          path: dist/${{ matrix.target }}/mirofish${{ matrix.target == 'windows-amd64' && '.exe' || '' }}
+          key: rt-${{ matrix.target }}-mirofish-${{ steps.shas.outputs.mirofish }}-${{ steps.scripthash.outputs.h }}
+
+      - name: Cache picoclaw
+        id: cache-picoclaw
+        uses: actions/cache@v4
+        with:
+          path: dist/${{ matrix.target }}/picoclaw${{ matrix.target == 'windows-amd64' && '.exe' || '' }}
+          key: rt-${{ matrix.target }}-picoclaw-${{ steps.shas.outputs.picoclaw }}-${{ steps.scripthash.outputs.h }}
+
+      - name: Cache hermes
+        id: cache-hermes
+        uses: actions/cache@v4
+        with:
+          path: dist/${{ matrix.target }}/hermes${{ matrix.target == 'windows-amd64' && '.exe' || '' }}
+          key: rt-${{ matrix.target }}-hermes-${{ steps.shas.outputs.hermes }}-${{ steps.scripthash.outputs.h }}
+
+      - name: Cache openfang
+        id: cache-openfang
+        uses: actions/cache@v4
+        with:
+          path: dist/${{ matrix.target }}/openfang${{ matrix.target == 'windows-amd64' && '.exe' || '' }}
+          key: rt-${{ matrix.target }}-openfang-${{ steps.shas.outputs.openfang }}-${{ steps.scripthash.outputs.h }}
+
+      - name: Compute skip list from cache hits
+        id: skip
+        shell: bash
+        env:
+          HIT_OPENCLAW: ${{ steps.cache-openclaw.outputs.cache-hit }}
+          HIT_ZEROCLAW: ${{ steps.cache-zeroclaw.outputs.cache-hit }}
+          HIT_NANOCLAW: ${{ steps.cache-nanoclaw.outputs.cache-hit }}
+          HIT_NEMOCLAW: ${{ steps.cache-nemoclaw.outputs.cache-hit }}
+          HIT_MIROFISH: ${{ steps.cache-mirofish.outputs.cache-hit }}
+          HIT_PICOCLAW: ${{ steps.cache-picoclaw.outputs.cache-hit }}
+          HIT_HERMES:   ${{ steps.cache-hermes.outputs.cache-hit }}
+          HIT_OPENFANG: ${{ steps.cache-openfang.outputs.cache-hit }}
+        run: |
+          set -euo pipefail
+          skipped=()
+          for pair in \
+            "openclaw:$HIT_OPENCLAW" \
+            "zeroclaw:$HIT_ZEROCLAW" \
+            "nanoclaw:$HIT_NANOCLAW" \
+            "nemoclaw:$HIT_NEMOCLAW" \
+            "mirofish:$HIT_MIROFISH" \
+            "picoclaw:$HIT_PICOCLAW" \
+            "hermes:$HIT_HERMES" \
+            "openfang:$HIT_OPENFANG"; do
+            name="${pair%%:*}"
+            hit="${pair##*:}"
+            if [[ "$hit" == "true" ]]; then
+              skipped+=("$name")
+              echo "::notice::cache HIT $name@${{ matrix.target }} — skipping rebuild"
+            fi
+          done
+          IFS=','; joined="${skipped[*]}"; unset IFS
+          echo "list=$joined" >> "$GITHUB_OUTPUT"
+          [[ -n "$joined" ]] && echo "Skipping (cached): $joined" || echo "No cached binaries — building all from source."
+
+      # update-runtimes.sh writes to cmd/server/runtimes/binaries/<target>/.
+      # Move into a clean dist/ tree afterwards for upload simplicity.
+      - name: Build runtimes
+        shell: bash
+        env:
+          ONLY: ${{ inputs.only || github.event.client_payload.only || '' }}
+          FRESH: ${{ inputs.fresh || 'false' }}
+          MATRIX_TARGET: ${{ matrix.target }}
+          MATRIX_CROSS: ${{ matrix.cross }}
+          SKIP_CACHED: ${{ steps.skip.outputs.list }}
+        run: |
+          set -euo pipefail
+          args=()
+          [[ "${FRESH:-false}" == "true" ]] && args+=(--fresh)
+          [[ -n "${ONLY:-}" ]] && args+=(--only "$ONLY")
+          [[ -n "${SKIP_CACHED:-}" ]] && args+=(--skip "$SKIP_CACHED")
+          if [[ "${MATRIX_CROSS}" == "true" ]]; then
+            args+=(--target "${MATRIX_TARGET}")
+            echo "::notice::Cross-compiling for ${MATRIX_TARGET} from $(uname -sm)"
+          fi
+          chmod +x scripts/update-runtimes.sh
+          scripts/update-runtimes.sh ${args[@]+"${args[@]}"} || {
+            ec=$?
+            echo "::warning::update-runtimes.sh exited $ec — continuing to publish whatever shells did build"
+          }
+          # Promote successfully-built binaries (incl. cache-restored) into dist/<target>/.
+          mkdir -p "dist/${MATRIX_TARGET}"
+          src="cmd/server/runtimes/binaries/${MATRIX_TARGET}"
+          if [[ -d "$src" ]]; then
+            for f in "$src"/*; do
+              [[ -e "$f" ]] || continue
+              [[ -s "$f" ]] || { echo "skip $(basename "$f"): 0 bytes"; continue; }
+              cp -f "$f" "dist/${MATRIX_TARGET}/"
+            done
+          fi
+          ls -lh "dist/${MATRIX_TARGET}/" || true
+
+      # =======================================================================
+      # Publish each built binary as an asset on a per-shell-per-SHA Release.
+      # Uses GITHUB_TOKEN (same-repo, no PAT needed).
+      # =======================================================================
+      - name: Publish to releases
+        if: success() || failure()      # publish whatever made it
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          TARGET: ${{ matrix.target }}
+          SHA_OPENCLAW: ${{ steps.shas.outputs.openclaw }}
+          SHA_ZEROCLAW: ${{ steps.shas.outputs.zeroclaw }}
+          SHA_NANOCLAW: ${{ steps.shas.outputs.nanoclaw }}
+          SHA_NEMOCLAW: ${{ steps.shas.outputs.nemoclaw }}
+          SHA_MIROFISH: ${{ steps.shas.outputs.mirofish }}
+          SHA_PICOCLAW: ${{ steps.shas.outputs.picoclaw }}
+          SHA_HERMES:   ${{ steps.shas.outputs.hermes }}
+          SHA_OPENFANG: ${{ steps.shas.outputs.openfang }}
+        run: |
+          set -uo pipefail
+          ext=""
+          [[ "$TARGET" == "windows-amd64" ]] && ext=".exe"
+          bin_dir="dist/$TARGET"
+          uploaded=0
+          for pair in \
+            "openclaw:$SHA_OPENCLAW" \
+            "zeroclaw:$SHA_ZEROCLAW" \
+            "nanoclaw:$SHA_NANOCLAW" \
+            "nemoclaw:$SHA_NEMOCLAW" \
+            "mirofish:$SHA_MIROFISH" \
+            "picoclaw:$SHA_PICOCLAW" \
+            "hermes:$SHA_HERMES" \
+            "openfang:$SHA_OPENFANG"; do
+            shell_name="${pair%%:*}"
+            sha="${pair##*:}"
+            [[ -z "$sha" || "$sha" == "unknown" ]] && { echo "skip $shell_name: no SHA"; continue; }
+            bin="$bin_dir/${shell_name}${ext}"
+            [[ -f "$bin" && -s "$bin" ]] || { echo "skip $shell_name: $bin missing or empty"; continue; }
+            sha12="${sha:0:12}"
+            tag="${shell_name}-${sha12}"
+            asset="${shell_name}-${TARGET}${ext}"
+            stage="$RUNNER_TEMP/$asset"
+            cp -f "$bin" "$stage"
+            if ! gh release view "$tag" >/dev/null 2>&1; then
+              notes="$RUNNER_TEMP/notes-${tag}.md"
+              {
+                printf 'Pre-built `%s` runtime binary.\n\n' "$shell_name"
+                printf '**Upstream commit:** `%s`\n' "$sha"
+                printf '**Built by:** [Runtimes CI run %s](https://github.com/%s/actions/runs/%s)\n' "${GITHUB_RUN_ID}" "${GITHUB_REPOSITORY}" "${GITHUB_RUN_ID}"
+                printf '**Built at:** %s\n\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+                printf 'Pin to this exact tag for reproducible deployments.\n'
+              } > "$notes"
+              gh release create "$tag" --title "${shell_name} @ ${sha12}" \
+                --notes-file "$notes" --latest=false 2>/tmp/gh.err || {
+                  if grep -qiE "already_exists|already exists" /tmp/gh.err; then :; \
+                  else cat /tmp/gh.err >&2; fi
+                }
+            fi
+            if gh release upload "$tag" "$stage" --clobber 2>/tmp/gh.err; then
+              size=$(wc -c < "$stage" | tr -d ' ')
+              echo "::notice::published $asset (${size} bytes) → $tag"
+              uploaded=$((uploaded + 1))
+            else
+              cat /tmp/gh.err >&2
+              echo "::warning::failed to upload $asset"
+            fi
+          done
+          echo "Published $uploaded asset(s) for $TARGET"
