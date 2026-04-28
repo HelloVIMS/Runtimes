@@ -426,7 +426,7 @@ jobs:
                 printf 'Pin to this exact tag for reproducible deployments.\n'
               } > "$notes"
               gh release create "$tag" --title "${shell_name} @ ${sha12}" \
-                --notes-file "$notes" --latest=false 2>/tmp/gh.err || {
+                --notes-file "$notes" --latest=false --prerelease 2>/tmp/gh.err || {
                   if grep -qiE "already_exists|already exists" /tmp/gh.err; then :; \
                   else cat /tmp/gh.err >&2; fi
                 }
@@ -453,3 +453,165 @@ jobs:
           path: ci-logs/
           if-no-files-found: ignore
           retention-days: 14
+
+  # ---------------------------------------------------------------------------
+  # Consolidate the latest binaries from every shell × target into a single
+  # rolling "latest" release. Per-SHA tags remain as prereleases for pinning;
+  # this release is the human-friendly entry point for everyone else.
+  #
+  # Runs after the matrix even if some targets failed — we publish whichever
+  # binaries are currently available rather than gating on full matrix success.
+  # ---------------------------------------------------------------------------
+  consolidate-latest:
+    name: Publish rolling 'latest' release
+    needs: build
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Resolve upstream shell SHAs
+        id: shas
+        shell: bash
+        run: |
+          chmod +x scripts/update-runtimes.sh
+          scripts/update-runtimes.sh --print-shas | tee /tmp/shell-shas.env
+          while IFS='=' read -r name sha; do
+            [[ -n "$name" && "$sha" != "unknown" ]] && echo "$name=$sha" >> "$GITHUB_OUTPUT"
+          done < /tmp/shell-shas.env
+
+      - name: Mirror per-SHA assets into a single 'latest' release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          SHA_OPENCLAW: ${{ steps.shas.outputs.openclaw }}
+          SHA_ZEROCLAW: ${{ steps.shas.outputs.zeroclaw }}
+          SHA_NANOCLAW: ${{ steps.shas.outputs.nanoclaw }}
+          SHA_NEMOCLAW: ${{ steps.shas.outputs.nemoclaw }}
+          SHA_MIROFISH: ${{ steps.shas.outputs.mirofish }}
+          SHA_PICOCLAW: ${{ steps.shas.outputs.picoclaw }}
+          SHA_HERMES:   ${{ steps.shas.outputs.hermes }}
+          SHA_OPENFANG: ${{ steps.shas.outputs.openfang }}
+        shell: bash
+        run: |
+          set -uo pipefail
+          mkdir -p staging
+          declare -A SHAS=(
+            [openclaw]="$SHA_OPENCLAW"
+            [zeroclaw]="$SHA_ZEROCLAW"
+            [nanoclaw]="$SHA_NANOCLAW"
+            [nemoclaw]="$SHA_NEMOCLAW"
+            [mirofish]="$SHA_MIROFISH"
+            [picoclaw]="$SHA_PICOCLAW"
+            [hermes]="$SHA_HERMES"
+            [openfang]="$SHA_OPENFANG"
+          )
+          # Build the manifest as we go so consumers can resolve SHA→tag without
+          # an extra `git ls-remote` round-trip.
+          {
+            echo "{"
+            echo "  \"updated\": \"$(date -u +%Y-%m-%dT%H:%M:%SZ)\","
+            echo "  \"shells\": {"
+            first=1
+            for shell_name in openclaw zeroclaw nanoclaw nemoclaw mirofish picoclaw hermes openfang; do
+              sha="${SHAS[$shell_name]}"
+              [[ -z "$sha" ]] && continue
+              [[ $first -eq 0 ]] && echo ","
+              first=0
+              printf '    "%s": { "sha": "%s", "tag": "%s-%s" }' \
+                "$shell_name" "$sha" "$shell_name" "${sha:0:12}"
+            done
+            echo ""
+            echo "  }"
+            echo "}"
+          } > staging/manifest.json
+          cat staging/manifest.json
+
+          # Pull every per-SHA asset for every platform.
+          downloaded=0
+          missing=()
+          for shell_name in openclaw zeroclaw nanoclaw nemoclaw mirofish picoclaw hermes openfang; do
+            sha="${SHAS[$shell_name]}"
+            [[ -z "$sha" ]] && continue
+            tag="${shell_name}-${sha:0:12}"
+            for target in darwin-arm64 darwin-amd64 linux-amd64 linux-arm64 windows-amd64; do
+              ext=""
+              [[ "$target" == "windows-amd64" ]] && ext=".exe"
+              asset="${shell_name}-${target}${ext}"
+              if gh release download "$tag" --pattern "$asset" \
+                   --output "staging/$asset" --clobber 2>/dev/null; then
+                size=$(wc -c < "staging/$asset" | tr -d ' ')
+                echo "  ✓ $asset ($size bytes) ← $tag"
+                downloaded=$((downloaded + 1))
+              else
+                missing+=("$asset")
+              fi
+            done
+          done
+          echo ""
+          echo "Downloaded $downloaded asset(s); ${#missing[@]} missing"
+
+          # Don't fail consolidation on missing assets — publish whatever made
+          # it through this build cycle. Empty staging is still a real failure.
+          if [[ $downloaded -eq 0 ]]; then
+            echo "::error::no per-SHA assets to consolidate"
+            exit 1
+          fi
+
+          # Compose stable release notes with current SHA → tag table.
+          notes="$RUNNER_TEMP/latest-notes.md"
+          {
+            echo "# Latest VIMS agent shell runtimes"
+            echo ""
+            echo "Rolling release. **Always contains the most recent successful build of each shell × platform.**"
+            echo "For reproducible pinning, use the per-SHA prerelease tags listed below."
+            echo ""
+            echo "Updated: $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+            echo ""
+            echo "## Current upstream commits"
+            echo ""
+            echo "| Shell | Upstream SHA | Pin tag |"
+            echo "|-------|--------------|---------|"
+            for shell_name in openclaw zeroclaw nanoclaw nemoclaw mirofish picoclaw hermes openfang; do
+              sha="${SHAS[$shell_name]}"
+              [[ -z "$sha" ]] && continue
+              echo "| \`$shell_name\` | \`${sha:0:12}\` | [\`${shell_name}-${sha:0:12}\`](https://github.com/$GH_REPO/releases/tag/${shell_name}-${sha:0:12}) |"
+            done
+            echo ""
+            echo "## Download"
+            echo ""
+            echo '```bash'
+            echo "# Pick your platform; replace SHELL with one of the eight names above."
+            echo "curl -fL -o openclaw \\"
+            echo "  https://github.com/$GH_REPO/releases/download/latest/openclaw-darwin-arm64"
+            echo '```'
+            echo ""
+            echo "Or fetch the JSON manifest:"
+            echo ""
+            echo '```bash'
+            echo "curl -fL https://github.com/$GH_REPO/releases/download/latest/manifest.json"
+            echo '```'
+            if [[ ${#missing[@]} -gt 0 ]]; then
+              echo ""
+              echo "<details><summary>${#missing[@]} asset(s) missing from this build cycle</summary>"
+              echo ""
+              for m in "${missing[@]}"; do echo "- \`$m\`"; done
+              echo ""
+              echo "</details>"
+            fi
+          } > "$notes"
+
+          # Recreate the 'latest' release each cycle so its asset list reflects
+          # only the current cycle's binaries — `gh release upload --clobber`
+          # alone would leave stale platforms in place if a target was dropped.
+          if gh release view latest >/dev/null 2>&1; then
+            gh release delete latest --yes --cleanup-tag || true
+          fi
+          gh release create latest staging/* \
+            --title "Latest runtimes (rolling)" \
+            --notes-file "$notes" \
+            --latest=true
+          echo "::notice::published 'latest' release with $(ls staging | wc -l | tr -d ' ') asset(s)"
