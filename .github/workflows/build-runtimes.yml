@@ -62,6 +62,13 @@ jobs:
           - target: linux-arm64
             os: ubuntu-24.04-arm
             cross: 'false'
+            # ubuntu-24.04-arm free runners are 2 vCPU / 8GB. The default
+            # parallel cargo + `cc -fuse-ld=lld` link step at the tail of
+            # openfang's Tauri workspace pushes peak RSS over 8GB and OOM-kills
+            # the runner right when `openfang-cli` finishes. Capping to 1 job
+            # serializes the heaviest crates and keeps RSS in budget. Costs
+            # ~10 extra minutes of wall time; we have 240min headroom.
+            cargo_jobs: '1'
           - target: windows-amd64
             os: windows-latest
             cross: 'false'
@@ -331,7 +338,11 @@ jobs:
           FRESH: ${{ inputs.fresh || 'false' }}
           MATRIX_TARGET: ${{ matrix.target }}
           MATRIX_CROSS: ${{ matrix.cross }}
+          MATRIX_CARGO_JOBS: ${{ matrix.cargo_jobs }}
           SKIP_CACHED: ${{ steps.skip.outputs.list }}
+          # Honored by every cargo invocation (zeroclaw + openfang) when set.
+          # Empty on amd64 targets so the default `nproc` parallelism is used.
+          CARGO_BUILD_JOBS: ${{ matrix.cargo_jobs }}
         run: |
           set -uo pipefail
           mkdir -p ci-logs
@@ -339,6 +350,8 @@ jobs:
           : > "$BUILD_LOG"
           {
             echo "[$(date -u +%H:%M:%SZ)] target=${MATRIX_TARGET} host=$(uname -sm) free=$(df -h / | tail -1)"
+            echo "[mem] $(free -h 2>/dev/null | head -2 || vm_stat 2>/dev/null | head -3)"
+            [[ -n "${MATRIX_CARGO_JOBS:-}" ]] && echo "[cargo] CARGO_BUILD_JOBS=${MATRIX_CARGO_JOBS} (oom mitigation)"
             args=()
             [[ "${FRESH:-false}" == "true" ]] && args+=(--fresh)
             [[ -n "${ONLY:-}" ]] && args+=(--only "$ONLY")
