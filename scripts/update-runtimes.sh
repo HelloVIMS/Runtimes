@@ -702,48 +702,79 @@ build_picoclaw() {
 
 build_hermes() {
   local dir="$SRC_DIR/hermes" out="$1"
-  require_tool python3 || return 1
-  # Prefer pipx, bootstrap if missing, fall back to plain pip --user.
-  if ! have pipx; then
-    warn "pipx missing — bootstrapping via: python3 -m pip install --user pipx"
-    python3 -m pip install --user --break-system-packages pipx 2>&1 | tee -a "$RUNTIME_LOG" || true
-  fi
-  if have pipx; then
-    ( cd "$dir" && pipx install --force . 2>&1 ) | tee -a "$RUNTIME_LOG" || \
-      ( cd "$dir" && python3 -m pip install --user --break-system-packages --force-reinstall . 2>&1 ) | tee -a "$RUNTIME_LOG"
+
+  # Hermes is a Python CLI (hermes_cli.main:main entry point). We bundle it
+  # into a standalone PyInstaller binary on every platform so end-users get
+  # a shippable executable — no pipx or system Python required. Previously
+  # this produced a bash launcher that required users to have hermes-agent
+  # pipx-installed separately, which (a) nobody does post-VIMS-install,
+  # and (b) doesn't run on Windows where `#!/usr/bin/env bash` is inert.
+
+  local arch_prefix=() py_bin=""
+  if [[ "$HOST_TARGET" == "darwin-arm64" && "$CURRENT_TARGET" == "darwin-amd64" ]]; then
+    if [[ -z "${X86_PYTHON:-}" || ! -x "${X86_PYTHON}" ]]; then
+      err "hermes: cross-build requires X86_PYTHON pointing to x86_64 python (got: '${X86_PYTHON:-unset}')"
+      return 1
+    fi
+    arch_prefix=(arch -x86_64)
+    py_bin="$X86_PYTHON"
+    info "hermes: cross-building darwin-amd64 via Rosetta 2 using $py_bin"
   else
-    ( cd "$dir" && python3 -m pip install --user --break-system-packages --force-reinstall . 2>&1 ) | tee -a "$RUNTIME_LOG"
+    require_tool uv "install: curl -LsSf https://astral.sh/uv/install.sh | sh" || return 1
   fi
-  # Hermes runs as a Python CLI; embed a launcher script that locates it at runtime.
-  cat > "$dir/hermes" <<'SH'
-#!/usr/bin/env bash
-# VIMS Hermes Launcher — locates and invokes the hermes CLI
-set -e
-# Candidate locations, in priority order
-CANDIDATES=(
-  "$HOME/.local/bin/hermes"
-  "$HOME/Library/Python/3.13/bin/hermes"
-  "$HOME/Library/Python/3.12/bin/hermes"
-  "$HOME/Library/Python/3.11/bin/hermes"
-  "/opt/homebrew/bin/hermes"
-  "/usr/local/bin/hermes"
-)
-if command -v hermes >/dev/null 2>&1; then
-  exec hermes "$@"
-fi
-for c in "${CANDIDATES[@]}"; do
-  if [ -x "$c" ]; then
-    exec "$c" "$@"
-  fi
-done
-# Last-resort: python -m hermes
-if command -v python3 >/dev/null 2>&1 && python3 -c 'import hermes' 2>/dev/null; then
-  exec python3 -m hermes "$@"
-fi
-echo "hermes CLI not found. Install: pipx install hermes-agent" >&2
-exit 127
-SH
-  chmod +x "$dir/hermes"
+
+  (
+    cd "$dir"
+    if [[ ${#arch_prefix[@]} -gt 0 ]]; then
+      # Rosetta cross path: plain pip + venv with the x86_64 Python.
+      "${arch_prefix[@]}" "$py_bin" -m venv .venv-x86 2>&1 \
+        || { err "hermes: failed to create x86_64 venv"; return 1; }
+      "${arch_prefix[@]}" .venv-x86/bin/pip install --upgrade pip pyinstaller 2>&1 \
+        || { err "hermes: failed to install pip+pyinstaller in x86_64 venv"; return 1; }
+      "${arch_prefix[@]}" .venv-x86/bin/pip install . 2>&1 \
+        || { err "hermes: pip install . failed in x86_64 venv"; return 1; }
+      "${arch_prefix[@]}" .venv-x86/bin/pyinstaller \
+        --name hermes \
+        --onefile \
+        --noconfirm \
+        --clean \
+        --target-arch x86_64 \
+        --collect-all hermes \
+        --collect-all hermes_cli \
+        --copy-metadata hermes-agent \
+        --hidden-import hermes_cli.main \
+        --paths . \
+        -c hermes_cli/main.py 2>&1
+    else
+      # Native path: uv sync then uv pip for pyinstaller.
+      uv sync 2>&1 || { err "hermes: uv sync failed"; return 1; }
+      uv pip install --quiet pyinstaller 2>&1 \
+        || { err "hermes: uv pip install pyinstaller failed"; return 1; }
+      local pyinst=".venv/bin/pyinstaller"
+      [[ -x "$pyinst" ]] || pyinst=".venv/Scripts/pyinstaller.exe"
+      [[ -x "$pyinst" ]] || { err "hermes: pyinstaller binary missing after uv pip install"; return 1; }
+      "$pyinst" \
+        --name hermes \
+        --onefile \
+        --noconfirm \
+        --clean \
+        --collect-all hermes \
+        --collect-all hermes_cli \
+        --copy-metadata hermes-agent \
+        --hidden-import hermes_cli.main \
+        --paths . \
+        -c hermes_cli/main.py 2>&1
+    fi
+    # onefile output: dist/hermes (or dist/hermes.exe on Windows)
+    local out_name="hermes"
+    [[ "$CURRENT_TARGET" == windows-* ]] && out_name="hermes.exe"
+    if [[ -f "dist/$out_name" ]]; then
+      cp -f "dist/$out_name" "$dir/hermes"
+      chmod +x "$dir/hermes" 2>/dev/null || true
+    fi
+  ) | tee -a "$RUNTIME_LOG"
+  [[ "${PIPESTATUS[0]}" -ne 0 ]] && { err "hermes: build failed"; return 1; }
+  [[ -s "$dir/hermes" ]] || { err "hermes: no binary produced at $dir/hermes"; return 1; }
   install_binary hermes "$dir/hermes"
 }
 
