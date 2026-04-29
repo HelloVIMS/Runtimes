@@ -44,8 +44,46 @@ env:
   MACOSX_DEPLOYMENT_TARGET: '11.0'
 
 jobs:
+  # ---------------------------------------------------------------------------
+  # Resolve every upstream HEAD SHA exactly ONCE per workflow run. Without this
+  # shared job, each matrix target re-resolved independently and openclaw's
+  # fast-moving master branch produced different SHAs per target — meaning no
+  # single per-SHA tag ever held all 5 platform binaries, and the
+  # consolidate-latest job (which also re-resolved) hunted for tags that no
+  # matrix job had ever published. Pin once, share with every downstream job.
+  # ---------------------------------------------------------------------------
+  resolve-shas:
+    name: Resolve upstream shell SHAs (shared)
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      openclaw: ${{ steps.r.outputs.openclaw }}
+      zeroclaw: ${{ steps.r.outputs.zeroclaw }}
+      nanoclaw: ${{ steps.r.outputs.nanoclaw }}
+      nemoclaw: ${{ steps.r.outputs.nemoclaw }}
+      mirofish: ${{ steps.r.outputs.mirofish }}
+      picoclaw: ${{ steps.r.outputs.picoclaw }}
+      hermes:   ${{ steps.r.outputs.hermes }}
+      openfang: ${{ steps.r.outputs.openfang }}
+      scripthash: ${{ steps.h.outputs.h }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: r
+        shell: bash
+        run: |
+          chmod +x scripts/update-runtimes.sh
+          scripts/update-runtimes.sh --print-shas | tee /tmp/shas.env
+          while IFS='=' read -r name sha; do
+            [[ -n "$name" && "$sha" != "unknown" ]] && echo "$name=$sha" >> "$GITHUB_OUTPUT"
+          done < /tmp/shas.env
+      - id: h
+        shell: bash
+        run: |
+          echo "h=${{ hashFiles('scripts/update-runtimes.sh', '.github/workflows/build-runtimes.yml') }}" >> "$GITHUB_OUTPUT"
+
   build:
     name: Build runtimes (${{ matrix.target }})
+    needs: resolve-shas
     strategy:
       fail-fast: false
       matrix:
@@ -211,79 +249,65 @@ jobs:
 
       # =======================================================================
       # Per-shell SHA-keyed binary cache (lives on this public repo).
+      # SHAs come from the shared resolve-shas job so every target/job uses
+      # the same set — no TOCTOU divergence between matrix workers.
       # =======================================================================
-      - name: Resolve upstream shell SHAs
-        id: shas
-        shell: bash
-        run: |
-          chmod +x scripts/update-runtimes.sh
-          scripts/update-runtimes.sh --print-shas | tee /tmp/shell-shas.env
-          while IFS='=' read -r name sha; do
-            [[ -n "$name" ]] && echo "$name=$sha" >> "$GITHUB_OUTPUT"
-          done < /tmp/shell-shas.env
-
-      - name: Compute script+workflow hash
-        id: scripthash
-        shell: bash
-        run: |
-          h="${{ hashFiles('scripts/update-runtimes.sh', '.github/workflows/build-runtimes.yml') }}"
-          echo "h=$h" >> "$GITHUB_OUTPUT"
 
       - name: Cache openclaw
         id: cache-openclaw
         uses: actions/cache@v4
         with:
           path: dist/${{ matrix.target }}/openclaw${{ matrix.target == 'windows-amd64' && '.exe' || '' }}
-          key: rt-${{ matrix.target }}-openclaw-${{ steps.shas.outputs.openclaw }}-${{ steps.scripthash.outputs.h }}
+          key: rt-${{ matrix.target }}-openclaw-${{ needs.resolve-shas.outputs.openclaw }}-${{ needs.resolve-shas.outputs.scripthash }}
 
       - name: Cache zeroclaw
         id: cache-zeroclaw
         uses: actions/cache@v4
         with:
           path: dist/${{ matrix.target }}/zeroclaw${{ matrix.target == 'windows-amd64' && '.exe' || '' }}
-          key: rt-${{ matrix.target }}-zeroclaw-${{ steps.shas.outputs.zeroclaw }}-${{ steps.scripthash.outputs.h }}
+          key: rt-${{ matrix.target }}-zeroclaw-${{ needs.resolve-shas.outputs.zeroclaw }}-${{ needs.resolve-shas.outputs.scripthash }}
 
       - name: Cache nanoclaw
         id: cache-nanoclaw
         uses: actions/cache@v4
         with:
           path: dist/${{ matrix.target }}/nanoclaw${{ matrix.target == 'windows-amd64' && '.exe' || '' }}
-          key: rt-${{ matrix.target }}-nanoclaw-${{ steps.shas.outputs.nanoclaw }}-${{ steps.scripthash.outputs.h }}
+          key: rt-${{ matrix.target }}-nanoclaw-${{ needs.resolve-shas.outputs.nanoclaw }}-${{ needs.resolve-shas.outputs.scripthash }}
 
       - name: Cache nemoclaw
         id: cache-nemoclaw
         uses: actions/cache@v4
         with:
           path: dist/${{ matrix.target }}/nemoclaw${{ matrix.target == 'windows-amd64' && '.exe' || '' }}
-          key: rt-${{ matrix.target }}-nemoclaw-${{ steps.shas.outputs.nemoclaw }}-${{ steps.scripthash.outputs.h }}
+          key: rt-${{ matrix.target }}-nemoclaw-${{ needs.resolve-shas.outputs.nemoclaw }}-${{ needs.resolve-shas.outputs.scripthash }}
 
       - name: Cache mirofish
         id: cache-mirofish
         uses: actions/cache@v4
         with:
           path: dist/${{ matrix.target }}/mirofish${{ matrix.target == 'windows-amd64' && '.exe' || '' }}
-          key: rt-${{ matrix.target }}-mirofish-${{ steps.shas.outputs.mirofish }}-${{ steps.scripthash.outputs.h }}
+          key: rt-${{ matrix.target }}-mirofish-${{ needs.resolve-shas.outputs.mirofish }}-${{ needs.resolve-shas.outputs.scripthash }}
 
       - name: Cache picoclaw
         id: cache-picoclaw
         uses: actions/cache@v4
         with:
           path: dist/${{ matrix.target }}/picoclaw${{ matrix.target == 'windows-amd64' && '.exe' || '' }}
-          key: rt-${{ matrix.target }}-picoclaw-${{ steps.shas.outputs.picoclaw }}-${{ steps.scripthash.outputs.h }}
+          key: rt-${{ matrix.target }}-picoclaw-${{ needs.resolve-shas.outputs.picoclaw }}-${{ needs.resolve-shas.outputs.scripthash }}
 
       - name: Cache hermes
         id: cache-hermes
         uses: actions/cache@v4
         with:
           path: dist/${{ matrix.target }}/hermes${{ matrix.target == 'windows-amd64' && '.exe' || '' }}
-          key: rt-${{ matrix.target }}-hermes-${{ steps.shas.outputs.hermes }}-${{ steps.scripthash.outputs.h }}
+          key: rt-${{ matrix.target }}-hermes-${{ needs.resolve-shas.outputs.hermes }}-${{ needs.resolve-shas.outputs.scripthash }}
 
       - name: Cache openfang
         id: cache-openfang
         uses: actions/cache@v4
         with:
           path: dist/${{ matrix.target }}/openfang${{ matrix.target == 'windows-amd64' && '.exe' || '' }}
-          key: rt-${{ matrix.target }}-openfang-${{ steps.shas.outputs.openfang }}-${{ steps.scripthash.outputs.h }}
+          key: rt-${{ matrix.target }}-openfang-${{ needs.resolve-shas.outputs.openfang }}-${{ needs.resolve-shas.outputs.scripthash }}
 
       - name: Compute skip list from cache hits
         id: skip
@@ -340,9 +364,12 @@ jobs:
           MATRIX_CROSS: ${{ matrix.cross }}
           MATRIX_CARGO_JOBS: ${{ matrix.cargo_jobs }}
           SKIP_CACHED: ${{ steps.skip.outputs.list }}
-          # Honored by every cargo invocation (zeroclaw + openfang) when set.
-          # Empty on amd64 targets so the default `nproc` parallelism is used.
-          CARGO_BUILD_JOBS: ${{ matrix.cargo_jobs }}
+          # Honored by every cargo invocation (zeroclaw + openfang). Cargo
+          # rejects an empty CARGO_BUILD_JOBS="" with `Number of parallel jobs
+          # should be \`default\` or a number`, so when matrix.cargo_jobs is
+          # unset (everywhere except linux-arm64 OOM mitigation), pass the
+          # literal string "default" and let cargo pick its own concurrency.
+          CARGO_BUILD_JOBS: ${{ matrix.cargo_jobs || 'default' }}
         run: |
           set -uo pipefail
           mkdir -p ci-logs
@@ -396,14 +423,14 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
           TARGET: ${{ matrix.target }}
-          SHA_OPENCLAW: ${{ steps.shas.outputs.openclaw }}
-          SHA_ZEROCLAW: ${{ steps.shas.outputs.zeroclaw }}
-          SHA_NANOCLAW: ${{ steps.shas.outputs.nanoclaw }}
-          SHA_NEMOCLAW: ${{ steps.shas.outputs.nemoclaw }}
-          SHA_MIROFISH: ${{ steps.shas.outputs.mirofish }}
-          SHA_PICOCLAW: ${{ steps.shas.outputs.picoclaw }}
-          SHA_HERMES:   ${{ steps.shas.outputs.hermes }}
-          SHA_OPENFANG: ${{ steps.shas.outputs.openfang }}
+          SHA_OPENCLAW: ${{ needs.resolve-shas.outputs.openclaw }}
+          SHA_ZEROCLAW: ${{ needs.resolve-shas.outputs.zeroclaw }}
+          SHA_NANOCLAW: ${{ needs.resolve-shas.outputs.nanoclaw }}
+          SHA_NEMOCLAW: ${{ needs.resolve-shas.outputs.nemoclaw }}
+          SHA_MIROFISH: ${{ needs.resolve-shas.outputs.mirofish }}
+          SHA_PICOCLAW: ${{ needs.resolve-shas.outputs.picoclaw }}
+          SHA_HERMES:   ${{ needs.resolve-shas.outputs.hermes }}
+          SHA_OPENFANG: ${{ needs.resolve-shas.outputs.openfang }}
         run: |
           set -uo pipefail
           ext=""
@@ -477,7 +504,7 @@ jobs:
   # ---------------------------------------------------------------------------
   consolidate-latest:
     name: Publish rolling 'latest' release
-    needs: build
+    needs: [resolve-shas, build]
     if: always()
     runs-on: ubuntu-latest
     timeout-minutes: 10
@@ -486,28 +513,18 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Resolve upstream shell SHAs
-        id: shas
-        shell: bash
-        run: |
-          chmod +x scripts/update-runtimes.sh
-          scripts/update-runtimes.sh --print-shas | tee /tmp/shell-shas.env
-          while IFS='=' read -r name sha; do
-            [[ -n "$name" && "$sha" != "unknown" ]] && echo "$name=$sha" >> "$GITHUB_OUTPUT"
-          done < /tmp/shell-shas.env
-
       - name: Mirror per-SHA assets into a single 'latest' release
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
-          SHA_OPENCLAW: ${{ steps.shas.outputs.openclaw }}
-          SHA_ZEROCLAW: ${{ steps.shas.outputs.zeroclaw }}
-          SHA_NANOCLAW: ${{ steps.shas.outputs.nanoclaw }}
-          SHA_NEMOCLAW: ${{ steps.shas.outputs.nemoclaw }}
-          SHA_MIROFISH: ${{ steps.shas.outputs.mirofish }}
-          SHA_PICOCLAW: ${{ steps.shas.outputs.picoclaw }}
-          SHA_HERMES:   ${{ steps.shas.outputs.hermes }}
-          SHA_OPENFANG: ${{ steps.shas.outputs.openfang }}
+          SHA_OPENCLAW: ${{ needs.resolve-shas.outputs.openclaw }}
+          SHA_ZEROCLAW: ${{ needs.resolve-shas.outputs.zeroclaw }}
+          SHA_NANOCLAW: ${{ needs.resolve-shas.outputs.nanoclaw }}
+          SHA_NEMOCLAW: ${{ needs.resolve-shas.outputs.nemoclaw }}
+          SHA_MIROFISH: ${{ needs.resolve-shas.outputs.mirofish }}
+          SHA_PICOCLAW: ${{ needs.resolve-shas.outputs.picoclaw }}
+          SHA_HERMES:   ${{ needs.resolve-shas.outputs.hermes }}
+          SHA_OPENFANG: ${{ needs.resolve-shas.outputs.openfang }}
         shell: bash
         run: |
           set -uo pipefail

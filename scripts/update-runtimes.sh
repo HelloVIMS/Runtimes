@@ -615,13 +615,18 @@ build_mirofish() {
       # time; users get GPU acceleration via their host CUDA install. Strip
       # the nvidia-* and triton wheels before bundling so the binary stays
       # under 4GB and matches the windows mirofish bundle (~350MB).
-      # Install pyinstaller directly into the synced venv via pip — NOT
-      # `uv run --with pyinstaller`, which re-resolves the lockfile and
-      # reinstalls the nvidia-cu12-* wheels we just stripped, defeating the
-      # 4GB PKG-TOC mitigation below. Bind to .venv/bin/pyinstaller instead.
-      .venv/bin/pip install --quiet pyinstaller 2>&1 || { err "mirofish: pyinstaller pip install failed"; return 1; }
+      # Install pyinstaller into the synced venv. uv 0.4+ stopped seeding
+      # pip into venvs by default, so `.venv/bin/pip` no longer exists out
+      # of `uv sync`. Use `uv pip install` against the active venv instead
+      # (UV_PROJECT_ENVIRONMENT=.venv is the uv default for the current
+      # project root). This is NOT `uv run --with pyinstaller` — that form
+      # re-resolves the lockfile and reinstalls the nvidia-cu12-* wheels we
+      # strip below, defeating the 4GB PKG-TOC mitigation. `uv pip install`
+      # is a thin wrapper over the synced venv's site-packages.
+      uv pip install --quiet pyinstaller 2>&1 \
+        || { err "mirofish: uv pip install pyinstaller failed"; return 1; }
       if [[ "$CURRENT_TARGET" == linux-* ]]; then
-        .venv/bin/pip uninstall -y \
+        uv pip uninstall \
           nvidia-cublas-cu12 nvidia-cuda-cupti-cu12 nvidia-cuda-nvrtc-cu12 \
           nvidia-cuda-runtime-cu12 nvidia-cudnn-cu12 nvidia-cufft-cu12 \
           nvidia-curand-cu12 nvidia-cusolver-cu12 nvidia-cusparse-cu12 \
@@ -631,12 +636,19 @@ build_mirofish() {
         # Sanity-check: list any remaining nvidia/triton packages so the log
         # makes the cause obvious if a future torch upgrade adds new ones.
         echo "[mirofish] residual GPU wheels after strip:"
-        .venv/bin/pip list 2>/dev/null | grep -Ei '^(nvidia-|triton)' || echo "  (none)"
+        uv pip list 2>/dev/null | grep -Ei '^(nvidia-|triton)' || echo "  (none)"
       fi
+      # PyInstaller's CLI lands in the venv as `.venv/bin/pyinstaller` even
+      # when installed via `uv pip` — it's a console_scripts entry that
+      # always materialises to disk. Run it directly to avoid `uv run`
+      # lockfile re-resolution semantics.
+      local pyinst=".venv/bin/pyinstaller"
+      [[ -x "$pyinst" ]] || pyinst=".venv/Scripts/pyinstaller.exe"  # windows venv layout
+      [[ -x "$pyinst" ]] || { err "mirofish: pyinstaller binary missing after uv pip install"; return 1; }
       if [[ -f mirofish.spec ]]; then
-        .venv/bin/pyinstaller mirofish.spec --noconfirm --clean 2>&1
+        "$pyinst" mirofish.spec --noconfirm --clean 2>&1
       else
-        .venv/bin/pyinstaller run.py \
+        "$pyinst" run.py \
           --name mirofish \
           --onefile \
           --noconfirm \
