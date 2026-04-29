@@ -517,15 +517,82 @@ build_zeroclaw() {
 build_nanoclaw() {
   local dir="$SRC_DIR/nanoclaw" out="$1"
   require_tool npm "install: https://nodejs.org" || return 1
-  ( cd "$dir" && npm install --no-audit --no-fund 2>&1 && npm run build 2>&1 ) \
+
+  # better-sqlite3 is a native Node module (.node binary). When nanoclaw
+  # is compiled with `bun build --compile`, the bun virtual fs has no
+  # node_modules layout, so the `bindings` package's runtime resolver
+  # walks up looking for package.json and crashes:
+  #   "Could not find module root given file: node_modules/bindings/bindings.js"
+  # Swap to `bun:sqlite` — Bun's built-in SQLite, API-compatible with the
+  # subset nanoclaw uses (Database/.prepare/.run/.get/.all/.exec/.pragma).
+  # Also drop better-sqlite3 from package.json so `npm install` doesn't try
+  # to compile its native binding (which is unused after the patch).
+  if [[ -f "$dir/package.json" ]]; then
+    info "nanoclaw: patching better-sqlite3 → bun:sqlite (native deps incompatible with bun --compile)"
+    python3 - "$dir" <<'PY'
+import json, os, re, sys
+root = sys.argv[1]
+
+# 1. Drop better-sqlite3 + its types from package.json so npm install doesn't
+#    attempt the native compile of an unused dep.
+pj_path = os.path.join(root, 'package.json')
+pj = json.load(open(pj_path))
+for section in ('dependencies', 'devDependencies', 'optionalDependencies', 'peerDependencies'):
+    if section in pj:
+        for k in ('better-sqlite3', '@types/better-sqlite3'):
+            pj[section].pop(k, None)
+json.dump(pj, open(pj_path, 'w'), indent=2)
+
+# 2. Walk every .ts file, rewrite the imports + namespaced types.
+#    - `import Database from 'better-sqlite3'` → `import { Database } from 'bun:sqlite'`
+#    - `import type Database from 'better-sqlite3'` → `import type { Database } from 'bun:sqlite'`
+#    - `Database.Database` → `Database`  (better-sqlite3 used the namespace
+#      pattern; bun:sqlite exports the class directly)
+import_default = re.compile(r"import\s+Database\s+from\s+['\"]better-sqlite3['\"]\s*;?")
+import_type    = re.compile(r"import\s+type\s+Database\s+from\s+['\"]better-sqlite3['\"]\s*;?")
+ns_type        = re.compile(r"\bDatabase\.Database\b")
+# .pragma('X = Y')  →  .exec('PRAGMA X = Y')
+# better-sqlite3 has a typed .pragma() convenience; bun:sqlite does not.
+# Match single-arg string-literal calls; multi-arg or dynamic-string calls
+# are reported as warnings (none in current upstream, but future-proof).
+pragma_call = re.compile(r"\.pragma\(\s*(['\"])([^'\"]+)\1\s*\)")
+
+n_files = 0
+for d, _, files in os.walk(os.path.join(root, 'src')):
+    for f in files:
+        if not f.endswith('.ts'):
+            continue
+        p = os.path.join(d, f)
+        s = open(p).read()
+        orig = s
+        s = import_type.sub("import type { Database } from 'bun:sqlite';", s)
+        s = import_default.sub("import { Database } from 'bun:sqlite';", s)
+        s = ns_type.sub('Database', s)
+        s = pragma_call.sub(lambda m: f".exec({m.group(1)}PRAGMA {m.group(2)}{m.group(1)})", s)
+        if s != orig:
+            open(p, 'w').write(s)
+            n_files += 1
+# Sanity-check: any unhandled .pragma( call left?
+import subprocess
+leftover = subprocess.run(
+    ['grep', '-rn', r'\.pragma(', os.path.join(root, 'src')],
+    capture_output=True, text=True,
+).stdout.strip()
+if leftover:
+    sys.stderr.write(f"nanoclaw: WARNING — unconverted .pragma() calls remain:\n{leftover}\n")
+print(f"nanoclaw: patched {n_files} TypeScript file(s)")
+PY
+  fi
+
+  # Install deps (no better-sqlite3 native compile now). Skip `npm run build`
+  # — we feed src/index.ts directly to bun, which handles TS natively and
+  # produces a working onefile binary with bun:sqlite linked in.
+  ( cd "$dir" && npm install --no-audit --no-fund --ignore-scripts 2>&1 ) \
     | tee -a "$RUNTIME_LOG"
-  [[ "${PIPESTATUS[0]}" -ne 0 ]] && { err "nanoclaw: npm install/build failed"; return 1; }
-  # Bundle the tsc output into a single file for embedding
-  local entry=""
-  for c in "$dir/dist/index.js" "$dir/src/index.ts" "$dir/index.js"; do
-    [[ -f "$c" ]] && { entry="$c"; break; }
-  done
-  [[ -z "$entry" ]] && { err "nanoclaw: no entry found"; return 1; }
+  [[ "${PIPESTATUS[0]}" -ne 0 ]] && { err "nanoclaw: npm install failed"; return 1; }
+
+  local entry="$dir/src/index.ts"
+  [[ -f "$entry" ]] || { err "nanoclaw: src/index.ts missing"; return 1; }
   bundle_node_entry "$dir" "$entry" "$dir/nanoclaw.bundle.mjs" || return 1
   install_binary nanoclaw "$dir/nanoclaw.bundle.mjs"
 }
