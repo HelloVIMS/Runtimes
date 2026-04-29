@@ -533,6 +533,36 @@ build_nanoclaw() {
 build_nemoclaw() {
   local dir="$SRC_DIR/nemoclaw" out="$1"
   require_tool npm || return 1
+
+  # Before tsc + bun compile, bake the package.json version into
+  # src/lib/version.ts. Upstream getVersion() tries `git describe`, then
+  # reads .version or package.json at runtime from `join(__dirname,'..','..')`
+  # — inside a bun --compile bundle __dirname is `/$bunfs/root` which has
+  # no package.json, so the fallback throws ENOENT and the CLI dies at
+  # startup. Stamp the version statically so getVersion() never touches fs.
+  if [[ -f "$dir/package.json" && -f "$dir/src/lib/version.ts" ]]; then
+    local ver
+    ver="$(python3 -c "import json,sys; print(json.load(open('$dir/package.json')).get('version','0.0.0'))" 2>/dev/null || echo 0.0.0)"
+    info "nemoclaw: stamping version.ts with package.json version=$ver"
+    python3 - "$dir/src/lib/version.ts" "$ver" <<'PY'
+import sys, re
+path, ver = sys.argv[1], sys.argv[2]
+src = open(path).read()
+# Replace the entire getVersion() body with a constant return. Regex matches
+# `export function getVersion(opts: VersionOptions = {}): string { ... }`
+pat = re.compile(
+    r'export function getVersion\(opts:\s*VersionOptions\s*=\s*\{\}\):\s*string\s*\{[\s\S]*?\n\}',
+    re.MULTILINE,
+)
+new = f'export function getVersion(_opts: VersionOptions = {{}}): string {{\n  return {ver!r};\n}}'
+if not pat.search(src):
+    # Not fatal — upstream may have refactored; tsc will fail noisily if so.
+    sys.stderr.write('nemoclaw: getVersion() pattern not found; skipping stamp\n')
+    sys.exit(0)
+open(path, 'w').write(pat.sub(new, src))
+PY
+  fi
+
   # --ignore-scripts: nemoclaw's package.json `prepare` script uses bash
   # syntax (`command -v tsc`, `[ -x ... ]`) which crashes under cmd.exe on
   # Windows with `-v was unexpected at this time`. We skip lifecycle scripts
@@ -571,6 +601,41 @@ build_mirofish() {
     require_tool uv "install: curl -LsSf https://astral.sh/uv/install.sh | sh" || return 1
   fi
 
+  # Mirofish's app/utils/locale.py loads locales/languages.json at import
+  # time via the sibling `../../../locales/` directory. In a PyInstaller
+  # onefile bundle, __file__ lives inside the _MEIxxxx temp extraction
+  # root and the sibling path resolves outside MEIPASS — crash at startup
+  # with FileNotFoundError. Patch the locale module to prefer sys._MEIPASS
+  # when frozen, and pass --add-data below to bundle the locales/ tree.
+  # Idempotent: only patches if the original path expression is still present.
+  local locale_py="$dir/backend/app/utils/locale.py"
+  if [[ -f "$locale_py" ]] && grep -q "os.path.join(os.path.dirname(__file__), '..', '..', '..', 'locales')" "$locale_py"; then
+    info "mirofish: patching locale.py to use sys._MEIPASS when frozen"
+    python3 - <<'PY' "$locale_py"
+import sys, re
+p = sys.argv[1]
+s = open(p).read()
+# Inject sys import + MEIPASS-aware path resolution
+old = "_locales_dir = os.path.join(os.path.dirname(__file__), '..', '..', '..', 'locales')"
+new = (
+    "import sys as _sys  # vims-runtime: PyInstaller locales patch\n"
+    "if getattr(_sys, 'frozen', False) and hasattr(_sys, '_MEIPASS'):\n"
+    "    _locales_dir = os.path.join(_sys._MEIPASS, 'locales')\n"
+    "else:\n"
+    "    _locales_dir = os.path.join(os.path.dirname(__file__), '..', '..', '..', 'locales')"
+)
+assert old in s, 'locale.py original line missing — upstream changed, review patch'
+open(p, 'w').write(s.replace(old, new))
+PY
+  fi
+
+  # --add-data separator is ':' on POSIX, ';' on Windows. CI only runs the
+  # native path on host==target, so for windows-amd64 we're on Windows Git
+  # Bash where pyinstaller still prefers ';'. Detect by CURRENT_TARGET.
+  local ps=":"
+  [[ "$CURRENT_TARGET" == windows-* ]] && ps=";"
+  local locales_data_arg=("--add-data" "../locales${ps}locales")
+
   (
     cd "$dir/backend"
     if [[ ${#arch_prefix[@]} -gt 0 ]]; then
@@ -597,7 +662,8 @@ build_mirofish() {
           --noconfirm \
           --clean \
           --target-arch x86_64 \
-          --collect-all mirofish \
+          --collect-all app \
+          "${locales_data_arg[@]}" \
           --copy-metadata transformers \
           --copy-metadata torch \
           --copy-metadata tokenizers \
@@ -653,7 +719,8 @@ build_mirofish() {
           --onefile \
           --noconfirm \
           --clean \
-          --collect-all mirofish \
+          --collect-all app \
+          "${locales_data_arg[@]}" \
           --copy-metadata transformers \
           --copy-metadata torch \
           --copy-metadata tokenizers \

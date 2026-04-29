@@ -560,8 +560,13 @@ jobs:
           } > staging/manifest.json
           cat staging/manifest.json
 
-          # Pull every per-SHA asset for every platform.
+          # Pull every per-SHA asset for every platform. If a per-SHA tag is
+          # missing (e.g. this run was --only=<subset> so other shells were
+          # never built at this SHA), fall back to the existing 'latest'
+          # release's copy — avoids a partial rebuild silently orphaning
+          # unrelated shells from the rolling release.
           downloaded=0
+          preserved=0
           missing=()
           for shell_name in openclaw zeroclaw nanoclaw nemoclaw mirofish picoclaw hermes openfang; do
             sha="${SHAS[$shell_name]}"
@@ -576,18 +581,23 @@ jobs:
                 size=$(wc -c < "staging/$asset" | tr -d ' ')
                 echo "  ✓ $asset ($size bytes) ← $tag"
                 downloaded=$((downloaded + 1))
+              elif gh release download latest --pattern "$asset" \
+                     --output "staging/$asset" --clobber 2>/dev/null; then
+                size=$(wc -c < "staging/$asset" | tr -d ' ')
+                echo "  ↺ $asset ($size bytes) ← previous latest (tag $tag not published)"
+                preserved=$((preserved + 1))
               else
                 missing+=("$asset")
               fi
             done
           done
           echo ""
-          echo "Downloaded $downloaded asset(s); ${#missing[@]} missing"
+          echo "Downloaded $downloaded new + preserved $preserved from prior latest; ${#missing[@]} missing"
 
           # Don't fail consolidation on missing assets — publish whatever made
           # it through this build cycle. Empty staging is still a real failure.
-          if [[ $downloaded -eq 0 ]]; then
-            echo "::error::no per-SHA assets to consolidate"
+          if [[ $((downloaded + preserved)) -eq 0 ]]; then
+            echo "::error::no per-SHA assets to consolidate and no prior latest to preserve from"
             exit 1
           fi
 
