@@ -16,7 +16,7 @@ cold compile.
 | nemoclaw   | https://github.com/nvidia/nemoclaw               | Python (NeMo)         |
 | mirofish   | https://github.com/mirofish/mirofish             | Python (PyInstaller)  |
 | picoclaw   | https://github.com/sipeed/picoclaw               | Go                    |
-| hermes     | https://github.com/hermes-runtime/hermes         | Python (pipx)         |
+| hermes     | https://github.com/nousresearch/hermes-agent     | Python (pipx)         |
 | openfang   | https://github.com/openfang/openfang             | Rust (Tauri)          |
 
 ## Targets
