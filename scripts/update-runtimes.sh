@@ -303,6 +303,11 @@ bundle_node_entry() {
         --outfile "$out" "$entry" 2>&1 | tee -a "$RUNTIME_LOG"
     )
     local rc="${PIPESTATUS[0]}"
+    # bun --compile appends .exe to --outfile on Windows. Check both paths
+    # and normalize so callers can use $out regardless of platform.
+    if [[ "$rc" -eq 0 && ! -f "$out" && -f "${out}.exe" ]]; then
+      cp -f "${out}.exe" "$out"
+    fi
     if [[ "$rc" -eq 0 && -f "$out" ]]; then
       chmod +x "$out"
       return 0
