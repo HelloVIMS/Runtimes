@@ -64,6 +64,18 @@ for p in /usr/bin /bin /usr/sbin /sbin /opt/homebrew/bin /usr/local/bin \
 done
 export PATH
 
+# Detect Python command. On Linux/macOS `python3` is standard; on Windows
+# Git Bash, actions/setup-python installs `python.exe` but not `python3`.
+# Resolve once at startup — fail loudly if neither is found.
+if command -v python3 &>/dev/null; then
+  PYTHON=python3
+elif command -v python &>/dev/null; then
+  PYTHON=python
+else
+  echo "[fatal] no python3 or python found on PATH" >&2
+  exit 1
+fi
+
 # -------- colors --------------------------------------------------------------
 if [[ -t 1 ]]; then
   C_RED=$'\033[0;31m'; C_GRN=$'\033[0;32m'; C_YEL=$'\033[0;33m'
@@ -534,7 +546,7 @@ build_nanoclaw() {
   # to compile its native binding (which is unused after the patch).
   if [[ -f "$dir/package.json" ]]; then
     info "nanoclaw: patching better-sqlite3 → bun:sqlite (native deps incompatible with bun --compile)"
-    python3 - "$dir" <<'PY'
+    "$PYTHON" - "$dir" <<'PY'
 import json, os, re, sys
 root = sys.argv[1]
 
@@ -614,9 +626,9 @@ build_nemoclaw() {
   # startup. Stamp the version statically so getVersion() never touches fs.
   if [[ -f "$dir/package.json" && -f "$dir/src/lib/version.ts" ]]; then
     local ver
-    ver="$(python3 -c "import json,sys; print(json.load(open('$dir/package.json')).get('version','0.0.0'))" 2>/dev/null || echo 0.0.0)"
+    ver="$("$PYTHON" -c "import json,sys; print(json.load(open('$dir/package.json')).get('version','0.0.0'))" 2>/dev/null || echo 0.0.0)"
     info "nemoclaw: stamping version.ts with package.json version=$ver"
-    python3 - "$dir/src/lib/version.ts" "$ver" <<'PY'
+    "$PYTHON" - "$dir/src/lib/version.ts" "$ver" <<'PY'
 import sys, re
 path, ver = sys.argv[1], sys.argv[2]
 src = open(path).read()
@@ -683,7 +695,7 @@ build_mirofish() {
   local locale_py="$dir/backend/app/utils/locale.py"
   if [[ -f "$locale_py" ]] && grep -q "os.path.join(os.path.dirname(__file__), '..', '..', '..', 'locales')" "$locale_py"; then
     info "mirofish: patching locale.py to use sys._MEIPASS when frozen"
-    python3 - <<'PY' "$locale_py"
+    "$PYTHON" - <<'PY' "$locale_py"
 import sys, re
 p = sys.argv[1]
 s = open(p).read()
