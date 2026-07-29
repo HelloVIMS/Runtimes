@@ -124,7 +124,7 @@ jobs:
         uses: actions/setup-go@v5
         with:
           go-version: ${{ env.GO_VERSION }}
-          cache: true
+          cache: false
 
       - name: Set up Node
         uses: actions/setup-node@v4
@@ -164,6 +164,14 @@ jobs:
           set +e
           arch -x86_64 /usr/local/bin/brew install python@3.11
           BREW_EXIT=$?
+          if [[ $BREW_EXIT -ne 0 ]]; then
+            echo "::warning::brew install python@3.11 exited $BREW_EXIT — retrying with --force"
+            arch -x86_64 /usr/local/bin/brew install --force python@3.11
+            BREW_EXIT=$?
+          fi
+          # Link forcefully — the keg is installed but `brew link` can fail
+          # when Homebrew thinks another version already owns the symlinks.
+          arch -x86_64 /usr/local/bin/brew link --overwrite --force python@3.11 2>/dev/null || true
           set -e
           if [[ $BREW_EXIT -ne 0 ]]; then
             echo "::warning::brew install python@3.11 exited $BREW_EXIT (link conflict tolerated)"
@@ -173,7 +181,9 @@ jobs:
           for cand in \
             "$PY_PREFIX/bin/python3.11" \
             /usr/local/opt/python@3.11/bin/python3.11 \
-            "$(ls -td /usr/local/Cellar/python@3.11/*/bin/python3.11 2>/dev/null | head -1)"; do
+            /usr/local/bin/python3.11 \
+            "$(ls -td /usr/local/Cellar/python@3.11/*/bin/python3.11 2>/dev/null | head -1)" \
+            "$(find /usr/local/Cellar/python@3.11 -name python3.11 -type f 2>/dev/null | head -1)"; do
             if [[ -x "$cand" ]]; then X86_PYTHON_PATH="$cand"; break; fi
           done
           if [[ -z "$X86_PYTHON_PATH" ]]; then
