@@ -76,6 +76,25 @@ else
   exit 1
 fi
 
+# Python on Windows defaults to the ANSI code page (cp1252) for text I/O, not
+# UTF-8, so reading an upstream source file that contains any byte outside that
+# map dies with UnicodeDecodeError. That is what silently broke nanoclaw on
+# windows-amd64: the better-sqlite3 → bun:sqlite patch aborted, the unpatched
+# import survived, and both the bun and esbuild bundlers then failed to resolve
+# it. Forcing UTF-8 mode fixes the whole class rather than one open() call.
+export PYTHONUTF8=1
+
+# npm runs lifecycle scripts through cmd.exe on Windows. Upstream shells write
+# their scripts for POSIX sh — `find ... | grep -q .`, `command -v tsc`,
+# `if ...; then ...; fi` — all of which cmd.exe rejects. nemoclaw's build:cli is
+# one of these, and when it failed the fallback chain masked it as a missing
+# script and produced no dist/, leaving nothing to bundle. Every Windows runner
+# here is Git Bash, so pointing npm at bash makes upstream scripts behave the
+# way their authors intended.
+if [[ "${OS:-}" == "Windows_NT" || "$(uname -s 2>/dev/null)" == MINGW* || "$(uname -s 2>/dev/null)" == MSYS* ]]; then
+  export npm_config_script_shell="${npm_config_script_shell:-bash}"
+fi
+
 # -------- colors --------------------------------------------------------------
 if [[ -t 1 ]]; then
   C_RED=$'\033[0;31m'; C_GRN=$'\033[0;32m'; C_YEL=$'\033[0;33m'
@@ -552,13 +571,16 @@ root = sys.argv[1]
 
 # 1. Drop better-sqlite3 + its types from package.json so npm install doesn't
 #    attempt the native compile of an unused dep.
+# Explicit encoding everywhere below: PYTHONUTF8=1 is exported by this script,
+# but relying on an env var for correctness means anyone running the patch by
+# hand on Windows silently gets cp1252 and a UnicodeDecodeError.
 pj_path = os.path.join(root, 'package.json')
-pj = json.load(open(pj_path))
+pj = json.load(open(pj_path, encoding='utf-8'))
 for section in ('dependencies', 'devDependencies', 'optionalDependencies', 'peerDependencies'):
     if section in pj:
         for k in ('better-sqlite3', '@types/better-sqlite3'):
             pj[section].pop(k, None)
-json.dump(pj, open(pj_path, 'w'), indent=2)
+json.dump(pj, open(pj_path, 'w', encoding='utf-8'), indent=2)
 
 # 2. Walk every .ts file, rewrite the imports + namespaced types.
 #    - `import Database from 'better-sqlite3'` → `import { Database } from 'bun:sqlite'`
@@ -580,14 +602,16 @@ for d, _, files in os.walk(os.path.join(root, 'src')):
         if not f.endswith('.ts'):
             continue
         p = os.path.join(d, f)
-        s = open(p).read()
+        # newline='' on both ends so a CRLF source file is not silently rewritten
+        # with different line endings than it arrived with.
+        s = open(p, encoding='utf-8', newline='').read()
         orig = s
         s = import_type.sub("import type { Database } from 'bun:sqlite';", s)
         s = import_default.sub("import { Database } from 'bun:sqlite';", s)
         s = ns_type.sub('Database', s)
         s = pragma_call.sub(lambda m: f".exec({m.group(1)}PRAGMA {m.group(2)}{m.group(1)})", s)
         if s != orig:
-            open(p, 'w').write(s)
+            open(p, 'w', encoding='utf-8', newline='').write(s)
             n_files += 1
 # Sanity-check: any unhandled .pragma( call left?
 import subprocess
