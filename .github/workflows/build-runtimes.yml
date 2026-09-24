@@ -149,49 +149,45 @@ jobs:
         run: rustup target add x86_64-apple-darwin
         shell: bash
 
-      - name: Install Rosetta 2 + x86_64 Python (darwin-amd64 cross)
+      # mirofish and hermes are PyInstaller bundles, which cannot cross-compile:
+      # a darwin-amd64 binary needs an x86_64 interpreter, run under Rosetta 2.
+      # This used to install x86_64 Homebrew at /usr/local and brew python@3.11
+      # from it, but Homebrew's installer now refuses Intel installs on Apple
+      # Silicon ("Homebrew on macOS is only supported on Apple Silicon
+      # processors!"). setup-python's x64 build is a pure x86_64 CPython (not
+      # universal2), so every child process it spawns stays x86_64 as well.
+      # update-environment is off so the native interpreter from the later
+      # "Set up Python" step stays the default on PATH.
+      - name: Install Rosetta 2 (darwin-amd64 cross)
         if: matrix.target == 'darwin-amd64'
         shell: bash
         run: |
           set -euxo pipefail
-          softwareupdate --install-rosetta --agree-to-license || true
-          arch -x86_64 uname -m
-          if [[ ! -x /usr/local/bin/brew ]]; then
-            arch -x86_64 /bin/bash -c \
-              'NONINTERACTIVE=1 /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"'
-          fi
-          arch -x86_64 /usr/local/bin/brew --version
-          set +e
-          arch -x86_64 /usr/local/bin/brew install python@3.11
-          BREW_EXIT=$?
-          if [[ $BREW_EXIT -ne 0 ]]; then
-            echo "::warning::brew install python@3.11 exited $BREW_EXIT — retrying with --force"
-            arch -x86_64 /usr/local/bin/brew install --force python@3.11
-            BREW_EXIT=$?
-          fi
-          # Link forcefully — the keg is installed but `brew link` can fail
-          # when Homebrew thinks another version already owns the symlinks.
-          arch -x86_64 /usr/local/bin/brew link --overwrite --force python@3.11 2>/dev/null || true
-          set -e
-          if [[ $BREW_EXIT -ne 0 ]]; then
-            echo "::warning::brew install python@3.11 exited $BREW_EXIT (link conflict tolerated)"
-          fi
-          PY_PREFIX="$(arch -x86_64 /usr/local/bin/brew --prefix python@3.11 2>/dev/null || true)"
-          X86_PYTHON_PATH=""
-          for cand in \
-            "$PY_PREFIX/bin/python3.11" \
-            /usr/local/opt/python@3.11/bin/python3.11 \
-            /usr/local/bin/python3.11 \
-            "$(ls -td /usr/local/Cellar/python@3.11/*/bin/python3.11 2>/dev/null | head -1)" \
-            "$(find /usr/local/Cellar/python@3.11 -name python3.11 -type f 2>/dev/null | head -1)"; do
-            if [[ -x "$cand" ]]; then X86_PYTHON_PATH="$cand"; break; fi
-          done
-          if [[ -z "$X86_PYTHON_PATH" ]]; then
-            echo "::error::could not locate x86_64 python3.11 keg binary"
-            ls -la /usr/local/Cellar/python@3.11/ || true
+          /usr/bin/pgrep -q oahd || softwareupdate --install-rosetta --agree-to-license
+          arch -x86_64 /usr/bin/uname -m
+
+      - name: Set up x86_64 Python (darwin-amd64 cross)
+        id: x86-python
+        if: matrix.target == 'darwin-amd64'
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          architecture: x64
+          update-environment: false
+
+      - name: Export X86_PYTHON (darwin-amd64 cross)
+        if: matrix.target == 'darwin-amd64'
+        shell: bash
+        env:
+          X86_PYTHON_PATH: ${{ steps.x86-python.outputs.python-path }}
+        run: |
+          set -euo pipefail
+          file "$X86_PYTHON_PATH"
+          machine=$(arch -x86_64 "$X86_PYTHON_PATH" -c 'import platform; print(platform.machine())')
+          if [[ "$machine" != "x86_64" ]]; then
+            echo "::error::$X86_PYTHON_PATH reports machine=$machine, expected x86_64"
             exit 1
           fi
-          file "$X86_PYTHON_PATH"
           arch -x86_64 "$X86_PYTHON_PATH" -c 'import platform; print("arch:", platform.machine(), "ver:", platform.python_version())'
           echo "X86_PYTHON=$X86_PYTHON_PATH" >> "$GITHUB_ENV"
 

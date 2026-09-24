@@ -454,7 +454,7 @@ can_build_for_target() {
         if [[ -n "${X86_PYTHON:-}" && -x "${X86_PYTHON}" ]]; then
           return 0
         fi
-        warn "mirofish: darwin-arm64 → darwin-amd64 cross requires X86_PYTHON env var pointing to an x86_64 Python (install via Rosetta+x86_64 Homebrew)"
+        warn "mirofish: darwin-arm64 → darwin-amd64 cross requires X86_PYTHON env var pointing to an x86_64 Python (CI: actions/setup-python with architecture: x64, run under Rosetta 2)"
       fi
       return 1 ;;
     *)
