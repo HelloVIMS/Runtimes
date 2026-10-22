@@ -1,0 +1,38 @@
+diff --git a/backend/app/utils/zep.py b/backend/app/utils/zep.py
+index c8bd4c9..9d64390 100644
+--- a/backend/app/utils/zep.py
++++ b/backend/app/utils/zep.py
+@@ -19,6 +19,24 @@ logger = get_logger("mirofish.zep")
+ T = TypeVar("T")
+ 
+ ZEP_CLOUD_BASE_URL = "https://api.getzep.com/api/v2"
++
++
++# vims-runtime: VIMS runs MiroFish's memory graph on the VIMS knowledge base
++# when no Zep Cloud key is configured, serving a Zep-compatible graph API from
++# the local VIMS daemon. Only that daemon sets VIMS_ZEP_BASE_URL; without it
++# MiroFish talks to Zep Cloud exactly as upstream does, and ZEP_API_URL stays
++# rejected below.
++def zep_base_url() -> str:
++    override = os.environ.get("VIMS_ZEP_BASE_URL", "").strip()
++    return override or ZEP_CLOUD_BASE_URL
++
++
++if os.environ.get("VIMS_ZEP_BASE_URL", "").strip():
++    logger.warning(
++        "Zep endpoint set by VIMS_ZEP_BASE_URL=%s (VIMS knowledge base, not Zep Cloud)",
++        os.environ["VIMS_ZEP_BASE_URL"].strip(),
++    )
++
+ # Keep request behavior aligned with the zep-cloud 3.25.0 SDK default that
+ # MiroFish used before introducing the shared client. This is an internal
+ # integration policy, not a deployment setting users need to tune.
+@@ -57,7 +74,7 @@ def normalize_zep_search_limit(limit: Any) -> int:
+ def _cached_zep_client(api_key: str, timeout: float) -> Zep:
+     return Zep(
+         api_key=api_key,
+-        base_url=ZEP_CLOUD_BASE_URL,
++        base_url=zep_base_url(),
+         timeout=timeout,
+     )
+ 

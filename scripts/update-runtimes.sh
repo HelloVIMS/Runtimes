@@ -688,6 +688,32 @@ PY
   install_binary nemoclaw "$dir/nemoclaw.bundle.mjs"
 }
 
+# apply_runtime_patches <shell> <source-dir>
+# Applies patches/<shell>/*.patch (lexical order) to a fresh upstream
+# checkout. A patch that no longer applies but reverses cleanly is already
+# in upstream (merged) and is skipped; one that does neither means upstream
+# changed under it, and the build fails rather than ship an unpatched or
+# half-patched runtime. The checkout is stashed before the next update, so
+# patches are re-applied on every build.
+apply_runtime_patches() {
+  local name="$1" dir="$2"
+  local patch_dir="$SCRIPT_DIR/../patches/$name"
+  [[ -d "$patch_dir" ]] || return 0
+  local p
+  for p in "$patch_dir"/*.patch; do
+    [[ -e "$p" ]] || continue
+    if git -C "$dir" apply --check "$p" 2>/dev/null; then
+      git -C "$dir" apply "$p" || { err "$name: applying $(basename "$p") failed"; return 1; }
+      info "$name: applied $(basename "$p")"
+    elif git -C "$dir" apply --reverse --check "$p" 2>/dev/null; then
+      info "$name: $(basename "$p") already upstream — skipped"
+    else
+      err "$name: $(basename "$p") no longer applies to upstream — review the patch"
+      return 1
+    fi
+  done
+}
+
 build_mirofish() {
   local dir="$SRC_DIR/mirofish" out="$1"
 
@@ -708,6 +734,12 @@ build_mirofish() {
   else
     require_tool uv "install: curl -LsSf https://astral.sh/uv/install.sh | sh" || return 1
   fi
+
+  # VIMS patches (patches/mirofish): MIROFISH_DATA_DIR (upstream PR
+  # 666ghj/MiroFish#923) so the packaged binary keeps projects across
+  # restarts, and VIMS_ZEP_BASE_URL so VIMS can run MiroFish's memory graph
+  # on the VIMS knowledge base when no Zep Cloud key is configured.
+  apply_runtime_patches mirofish "$dir" || return 1
 
   # Mirofish's app/utils/locale.py loads locales/languages.json at import
   # time via the sibling `../../../locales/` directory. In a PyInstaller

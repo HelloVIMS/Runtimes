@@ -79,7 +79,7 @@ jobs:
       - id: h
         shell: bash
         run: |
-          echo "h=${{ hashFiles('scripts/update-runtimes.sh', '.github/workflows/build-runtimes.yml') }}" >> "$GITHUB_OUTPUT"
+          echo "h=${{ hashFiles('scripts/update-runtimes.sh', '.github/workflows/build-runtimes.yml', 'patches/**') }}" >> "$GITHUB_OUTPUT"
 
   build:
     name: Build runtimes (${{ matrix.target }})

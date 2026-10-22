@@ -1,0 +1,115 @@
+diff --git a/backend/app/api/simulation.py b/backend/app/api/simulation.py
+index aae7678..8636a67 100644
+--- a/backend/app/api/simulation.py
++++ b/backend/app/api/simulation.py
+@@ -865,9 +865,7 @@ def _get_report_id_for_simulation(simulation_id: str) -> str:
+     import json
+     from datetime import datetime
+     
+-    # reports 目录路径：backend/uploads/reports
+-    # __file__ 是 app/api/simulation.py，需要向上两级到 backend/
+-    reports_dir = os.path.join(os.path.dirname(__file__), '../../uploads/reports')
++    reports_dir = os.path.join(Config.UPLOAD_FOLDER, 'reports')
+     if not os.path.exists(reports_dir):
+         return None
+     
+@@ -2161,10 +2159,7 @@ def get_simulation_posts(simulation_id: str):
+         limit = request.args.get('limit', 50, type=int)
+         offset = request.args.get('offset', 0, type=int)
+ 
+-        sim_dir = os.path.join(
+-            os.path.dirname(__file__),
+-            f'../../uploads/simulations/{simulation_id}'
+-        )
++        sim_dir = os.path.join(Config.OASIS_SIMULATION_DATA_DIR, simulation_id)
+ 
+         db_file = f"{platform}_simulation.db"
+         db_path = os.path.join(sim_dir, db_file)
+@@ -2239,10 +2234,7 @@ def get_simulation_comments(simulation_id: str):
+         limit = request.args.get('limit', 50, type=int)
+         offset = request.args.get('offset', 0, type=int)
+ 
+-        sim_dir = os.path.join(
+-            os.path.dirname(__file__),
+-            f'../../uploads/simulations/{simulation_id}'
+-        )
++        sim_dir = os.path.join(Config.OASIS_SIMULATION_DATA_DIR, simulation_id)
+         
+         db_path = os.path.join(sim_dir, f"{platform}_simulation.db")
+         
+diff --git a/backend/app/config.py b/backend/app/config.py
+index 02aed9a..c2fbfb2 100644
+--- a/backend/app/config.py
++++ b/backend/app/config.py
+@@ -34,7 +34,13 @@ class Config:
+     
+     # 文件上传配置
+     MAX_CONTENT_LENGTH = 50 * 1024 * 1024  # 50MB
+-    UPLOAD_FOLDER = os.path.join(os.path.dirname(__file__), '../uploads')
++    # 数据目录：项目、模拟与报告均存放于此。默认 backend/uploads；
++    # 设置 MIROFISH_DATA_DIR 可指向持久化目录（Docker 卷、打包后的可执行文件等，
++    # 后者的源码目录是每次启动都会重建的临时目录）。
++    UPLOAD_FOLDER = os.path.abspath(
++        os.environ.get('MIROFISH_DATA_DIR')
++        or os.path.join(os.path.dirname(__file__), '../uploads')
++    )
+     ALLOWED_EXTENSIONS = {'pdf', 'md', 'txt', 'markdown'}
+     
+     # 文本处理配置
+@@ -43,7 +49,7 @@ class Config:
+     
+     # OASIS模拟配置
+     OASIS_DEFAULT_MAX_ROUNDS = int(os.environ.get('OASIS_DEFAULT_MAX_ROUNDS', '10'))
+-    OASIS_SIMULATION_DATA_DIR = os.path.join(os.path.dirname(__file__), '../uploads/simulations')
++    OASIS_SIMULATION_DATA_DIR = os.path.join(UPLOAD_FOLDER, 'simulations')
+     
+     # OASIS平台可用动作配置
+     OASIS_TWITTER_ACTIONS = [
+diff --git a/backend/app/services/simulation_manager.py b/backend/app/services/simulation_manager.py
+index 73c32e0..64697c1 100644
+--- a/backend/app/services/simulation_manager.py
++++ b/backend/app/services/simulation_manager.py
+@@ -137,10 +137,7 @@ class SimulationManager:
+     """
+     
+     # 模拟数据存储目录
+-    SIMULATION_DATA_DIR = os.path.join(
+-        os.path.dirname(__file__), 
+-        '../../uploads/simulations'
+-    )
++    SIMULATION_DATA_DIR = Config.OASIS_SIMULATION_DATA_DIR
+     
+     def __init__(self):
+         # 确保目录存在
+diff --git a/backend/app/services/simulation_runner.py b/backend/app/services/simulation_runner.py
+index b1b9989..9309c37 100644
+--- a/backend/app/services/simulation_runner.py
++++ b/backend/app/services/simulation_runner.py
+@@ -213,10 +213,7 @@ class SimulationRunner:
+     """
+     
+     # 运行状态存储目录
+-    RUN_STATE_DIR = os.path.join(
+-        os.path.dirname(__file__),
+-        '../../uploads/simulations'
+-    )
++    RUN_STATE_DIR = Config.OASIS_SIMULATION_DATA_DIR
+     
+     # 脚本目录
+     SCRIPTS_DIR = os.path.join(
+diff --git a/backend/app/services/zep_tools.py b/backend/app/services/zep_tools.py
+index 7535e39..08c5808 100644
+--- a/backend/app/services/zep_tools.py
++++ b/backend/app/services/zep_tools.py
+@@ -1506,10 +1506,7 @@ class ZepToolsService:
+         import csv
+         
+         # 构建人设文件路径
+-        sim_dir = os.path.join(
+-            os.path.dirname(__file__), 
+-            f'../../uploads/simulations/{simulation_id}'
+-        )
++        sim_dir = os.path.join(Config.OASIS_SIMULATION_DATA_DIR, simulation_id)
+         
+         profiles = []
+         

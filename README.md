@@ -74,6 +74,22 @@ gh workflow run build-runtimes.yml --repo HelloVIMS/Runtimes \
   -f only=mirofish,openfang   # rebuild a subset
 ```
 
+## Patches
+
+Most shells are built from upstream unmodified. Where VIMS needs a change
+upstream hasn't taken, the build applies `patches/<shell>/*.patch` to the
+fresh checkout (`apply_runtime_patches` in `scripts/update-runtimes.sh`). A
+patch upstream has merged is skipped automatically; one that stops applying
+fails the build instead of shipping an unpatched runtime.
+
+| Shell | Patch | Why |
+|-------|-------|-----|
+| `mirofish` | `0001-configurable-data-dir.patch` | `MIROFISH_DATA_DIR` for projects, simulations and reports, so the packaged binary keeps them across restarts (upstream PR [666ghj/MiroFish#923](https://github.com/666ghj/MiroFish/pull/923)) |
+| `mirofish` | `0002-vims-zep-base-url.patch` | `VIMS_ZEP_BASE_URL`: lets VIMS run MiroFish's memory graph on the VIMS knowledge base when no Zep Cloud key is configured. Unset, MiroFish talks to Zep Cloud exactly as upstream does |
+
+Release tags still name the upstream commit; a patched shell's binary is
+that commit plus its patches.
+
 ## Licensing
 
 Binaries are redistributed under each upstream project's original license.
