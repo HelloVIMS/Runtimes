@@ -1,0 +1,152 @@
+diff --git a/src/gateway-providers/installed.ts b/src/gateway-providers/installed.ts
+index fd0de45..4cf093d 100644
+--- a/src/gateway-providers/installed.ts
++++ b/src/gateway-providers/installed.ts
+@@ -5,3 +5,4 @@
+  * and the provider container-config barrel. Nothing outside this directory is
+  * rewritten to install a gateway.
+  */
++import './vims.js';
+diff --git a/src/gateway-providers/vims.test.ts b/src/gateway-providers/vims.test.ts
+new file mode 100644
+index 0000000..8619aa6
+--- /dev/null
++++ b/src/gateway-providers/vims.test.ts
+@@ -0,0 +1,52 @@
++import { describe, expect, it } from 'vitest';
++
++import { getGatewayProviderRegistration } from './gateway-provider-registry.js';
++import { containerAnthropicUrl, readVimsGatewaySettings, VIMS_GATEWAY_KIND, vimsContribution } from './vims.js';
++
++describe('VIMS gateway provider', () => {
++  it('rewrites loopback to the container host and keeps the route', () => {
++    expect(containerAnthropicUrl('http://127.0.0.1:8089/api/anthropic/')).toBe(
++      'http://host.docker.internal:8089/api/anthropic',
++    );
++    expect(containerAnthropicUrl('http://localhost:8089/api/anthropic')).toBe(
++      'http://host.docker.internal:8089/api/anthropic',
++    );
++    expect(containerAnthropicUrl('https://vims.example:8443/api/anthropic')).toBe(
++      'https://vims.example:8443/api/anthropic',
++    );
++  });
++
++  it('routes models through VIMS with only the scoped VIMS token', () => {
++    const c = vimsContribution({ anthropicUrl: 'http://127.0.0.1:8089/api/anthropic', token: 'tok' });
++    expect(c.env).toEqual({
++      ANTHROPIC_BASE_URL: 'http://host.docker.internal:8089/api/anthropic',
++      ANTHROPIC_AUTH_TOKEN: 'tok',
++      NO_PROXY: 'host.docker.internal',
++      no_proxy: 'host.docker.internal',
++    });
++    expect(c.networkAccess).toEqual({ endpoint: 'host.docker.internal', target: { kind: 'host' } });
++  });
++
++  it('fails closed without settings', () => {
++    expect(() => readVimsGatewaySettings({})).toThrow(/NANOCLAW_VIMS_ANTHROPIC_URL/);
++    expect(
++      readVimsGatewaySettings({
++        NANOCLAW_VIMS_ANTHROPIC_URL: 'http://127.0.0.1:1/a',
++        NANOCLAW_VIMS_GATEWAY_TOKEN: 't',
++      }),
++    ).toEqual({ anthropicUrl: 'http://127.0.0.1:1/a', token: 't' });
++  });
++
++  it('registers and holds the approval stream open until aborted', async () => {
++    const def = getGatewayProviderRegistration(VIMS_GATEWAY_KIND);
++    expect(def).toBeDefined();
++    const ctrl = new AbortController();
++    let done = false;
++    const p = def!.approvals.subscribe(async () => 'deny', ctrl.signal).then(() => (done = true));
++    await new Promise((r) => setTimeout(r, 20));
++    expect(done).toBe(false);
++    ctrl.abort();
++    await p;
++    expect(done).toBe(true);
++  });
++});
+diff --git a/src/gateway-providers/vims.ts b/src/gateway-providers/vims.ts
+new file mode 100644
+index 0000000..fb1bc37
+--- /dev/null
++++ b/src/gateway-providers/vims.ts
+@@ -0,0 +1,79 @@
++/**
++ * VIMS as NanoClaw's credential gateway.
++ *
++ * When VIMS launches NanoClaw it owns model access: every agent container
++ * reaches models only through the VIMS daemon's Anthropic-compatible route,
++ * authenticated with this instance's scoped VIMS gateway token. VIMS picks
++ * the model (local vLLM or a cloud key held in its Key Manager), so no
++ * provider credential ever enters a container.
++ *
++ * VIMS holds no requests for human approval, so the approval stream stays
++ * open, idle, until the host ends it.
++ */
++import { readEnvFile } from '../env.js';
++import { log } from '../log.js';
++import {
++  registerGatewayProvider,
++  type GatewayContribution,
++  type GatewaySessionInput,
++  type GatewaySessionLease,
++} from './gateway-provider-registry.js';
++
++export const VIMS_GATEWAY_KIND = 'vims';
++const CONTAINER_HOST = 'host.docker.internal';
++const KEYS = ['NANOCLAW_VIMS_ANTHROPIC_URL', 'NANOCLAW_VIMS_GATEWAY_TOKEN'] as const;
++
++export interface VimsGatewaySettings {
++  anthropicUrl: string;
++  token: string;
++}
++
++/** `process.env` wins, then `.env`; both are required. */
++export function readVimsGatewaySettings(env: NodeJS.ProcessEnv = process.env): VimsGatewaySettings {
++  const file = readEnvFile([...KEYS]);
++  const anthropicUrl = (env.NANOCLAW_VIMS_ANTHROPIC_URL || file.NANOCLAW_VIMS_ANTHROPIC_URL || '').trim();
++  const token = (env.NANOCLAW_VIMS_GATEWAY_TOKEN || file.NANOCLAW_VIMS_GATEWAY_TOKEN || '').trim();
++  if (!anthropicUrl || !token) {
++    throw new Error('VIMS gateway requires NANOCLAW_VIMS_ANTHROPIC_URL and NANOCLAW_VIMS_GATEWAY_TOKEN');
++  }
++  return { anthropicUrl, token };
++}
++
++/** The host-side loopback URL VIMS listens on, as an agent container must address it. */
++export function containerAnthropicUrl(hostUrl: string): string {
++  const url = new URL(hostUrl);
++  if (url.hostname === '127.0.0.1' || url.hostname === 'localhost' || url.hostname === '::1') {
++    url.hostname = CONTAINER_HOST;
++  }
++  return url.toString().replace(/\/$/, '');
++}
++
++export function vimsContribution(settings: VimsGatewaySettings): GatewayContribution {
++  return {
++    env: {
++      ANTHROPIC_BASE_URL: containerAnthropicUrl(settings.anthropicUrl),
++      ANTHROPIC_AUTH_TOKEN: settings.token,
++      NO_PROXY: CONTAINER_HOST,
++      no_proxy: CONTAINER_HOST,
++    },
++    networkAccess: { endpoint: CONTAINER_HOST, target: { kind: 'host' } },
++  };
++}
++
++async function ensureSession(input: GatewaySessionInput): Promise<GatewaySessionLease> {
++  const contribution = vimsContribution(readVimsGatewaySettings());
++  log.info('VIMS gateway applied', { agentGroupId: input.key.agentGroupId, sessionId: input.key.sessionId });
++  return { contribution };
++}
++
++function idleUntilAborted(signal: AbortSignal): Promise<void> {
++  if (signal.aborted) return Promise.resolve();
++  return new Promise((resolve) => signal.addEventListener('abort', () => resolve(), { once: true }));
++}
++
++registerGatewayProvider({
++  kind: VIMS_GATEWAY_KIND,
++  agentSkills: [],
++  sessions: { ensure: ensureSession },
++  approvals: { subscribe: (_decide, signal) => idleUntilAborted(signal) },
++});

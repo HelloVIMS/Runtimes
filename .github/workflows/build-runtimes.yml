@@ -589,6 +589,12 @@ jobs:
               ext=""
               [[ "$target" == "windows-amd64" ]] && ext=".exe"
               asset="${shell_name}-${target}${ext}"
+              # NanoClaw ships as a natively built runtime tree for Linux
+              # and macOS arm64 (scripts/update-runtimes.sh build_nanoclaw);
+              # never carry an older onefile build forward for the others.
+              if [[ "$shell_name" == nanoclaw && ( "$target" == windows-amd64 || "$target" == darwin-amd64 ) ]]; then
+                continue
+              fi
               if gh release download "$tag" --pattern "$asset" \
                    --output "staging/$asset" --clobber 2>/dev/null; then
                 size=$(wc -c < "staging/$asset" | tr -d ' ')

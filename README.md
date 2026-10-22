@@ -23,6 +23,15 @@ cold compile.
 
 `darwin-arm64` · `darwin-amd64` · `linux-amd64` · `linux-arm64` · `windows-amd64`
 
+**NanoClaw is the exception.** NanoClaw v2 is a checkout-rooted app (it reads
+`package.json`, `templates/` and `container/` from its working directory and
+builds its agent image from that tree), so a single-file binary cannot run it.
+Its `nanoclaw-<target>` asset is a gzip'd tar of the built tree (`dist/` plus
+`node_modules`), which VIMS unpacks and stages one root per instance from.
+`node_modules` holds per-platform optional dependencies, so the tree is built
+natively only: `linux-amd64`, `linux-arm64`, `darwin-arm64`. NanoClaw does not
+run on Windows, and there is no `darwin-amd64` build.
+
 ## Layout
 
 Each release is `<shell>-<sha12>` where `<sha12>` is the first 12 chars of
@@ -86,6 +95,8 @@ fails the build instead of shipping an unpatched runtime.
 |-------|-------|-----|
 | `mirofish` | `0001-configurable-data-dir.patch` | `MIROFISH_DATA_DIR` for projects, simulations and reports, so the packaged binary keeps them across restarts (upstream PR [666ghj/MiroFish#923](https://github.com/666ghj/MiroFish/pull/923)) |
 | `mirofish` | `0002-vims-zep-base-url.patch` | `VIMS_ZEP_BASE_URL`: lets VIMS run MiroFish's memory graph on the VIMS knowledge base when no Zep Cloud key is configured. Unset, MiroFish talks to Zep Cloud exactly as upstream does |
+| `nanoclaw` | `0001-vims-gateway-provider.patch` | A `vims` credential-gateway provider (`NANOCLAW_GATEWAY_PROVIDER=vims`): agent containers reach models only through the VIMS daemon's Anthropic route with the instance's VIMS token, and VIMS picks the model (local vLLM or a Key Manager key). Inert unless selected |
+| `nanoclaw` | `0002-cli-turn-ack.patch` | The CLI channel acknowledges each chat line with its inbound id (`{"accepted": …}`) and marks edits with `operation`/`messageId`, so a programmatic client (VIMS) can tell an edit of an earlier message from a reply to the one it sent. Extra lines/fields only; terminal clients ignore them |
 
 Release tags still name the upstream commit; a patched shell's binary is
 that commit plus its patches.

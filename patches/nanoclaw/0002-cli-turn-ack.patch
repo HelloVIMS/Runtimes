@@ -1,0 +1,143 @@
+diff --git a/src/channels/cli.test.ts b/src/channels/cli.test.ts
+index 4aec5af..8ed1957 100644
+--- a/src/channels/cli.test.ts
++++ b/src/channels/cli.test.ts
+@@ -93,18 +93,34 @@ describe('cli channel: routed message carries to.instance', () => {
+ });
+ 
+ /** Connect a chat client, deliver one outbound content object, resolve with the line the client reads. */
+-async function deliverToChat(content: Record<string, unknown>): Promise<Record<string, unknown>> {
++let lastAccepted: unknown;
++
++async function deliverToChat(content: Record<string, unknown>, inReplyTo?: string): Promise<Record<string, unknown>> {
+   const socket = net.connect(path.join(TEST_DIR, 'cli.sock'));
++  lastAccepted = undefined;
++  // The first line is the `accepted` acknowledgement; resolve on the first
++  // line that carries text.
+   const line = new Promise<Record<string, unknown>>((resolve, reject) => {
+     let buffer = '';
+     socket.on('data', (chunk) => {
+       buffer += chunk.toString('utf8');
+-      const idx = buffer.indexOf('\n');
+-      if (idx < 0) return;
+-      const raw = buffer.slice(0, idx);
+-      Promise.resolve()
+-        .then(() => JSON.parse(raw))
+-        .then(resolve, reject);
++      let idx: number;
++      while ((idx = buffer.indexOf('\n')) >= 0) {
++        const raw = buffer.slice(0, idx);
++        buffer = buffer.slice(idx + 1);
++        let parsed: Record<string, unknown>;
++        try {
++          parsed = JSON.parse(raw);
++        } catch (err) {
++          reject(err);
++          return;
++        }
++        if ('accepted' in parsed) {
++          lastAccepted = parsed.accepted;
++          continue;
++        }
++        resolve(parsed);
++      }
+     });
+     socket.once('error', reject);
+     socket.once('close', () => reject(new Error('socket closed before a line arrived')));
+@@ -136,6 +152,19 @@ describe('cli channel: chat delivery', () => {
+   it('sends a normal reply without the flag', async () => {
+     expect(await deliverToChat({ text: 'pong' })).toEqual({ text: 'pong' });
+   });
++
++  it('acknowledges a chat message with its inbound id', async () => {
++    await deliverToChat({ text: 'pong' });
++    expect(lastAccepted).toMatch(/^cli-\d+-[a-z0-9]+$/);
++  });
++
++  it('marks an edit of an earlier message', async () => {
++    expect(await deliverToChat({ operation: 'edit', messageId: 'cli-2-def:ag-1', text: 'fixed' })).toEqual({
++      text: 'fixed',
++      operation: 'edit',
++      messageId: 'cli-2-def:ag-1',
++    });
++  });
+ });
+ 
+ // The runner can't share host modules, so its notice constants have copies here,
+diff --git a/src/channels/cli.ts b/src/channels/cli.ts
+index 51d275c..f5206ea 100644
+--- a/src/channels/cli.ts
++++ b/src/channels/cli.ts
+@@ -18,8 +18,14 @@
+  *                                                         # (instance optional; default = channelType)
+  *     { "text": "...", "to": {...}, "reply_to": {...} }   # + redirect replies
+  *   Server → client:
++ *     { "accepted": "cli-…" }                             # id given to a plain chat message
+  *     { "text": "agent reply" }
+  *     { "text": "...", "failureNotice": true }            # the agent run failed
++ *     { "text": "...", "operation": "edit", "messageId": "…" } # an edit of an earlier message
++ *
++ * `accepted` and the edit fields let a programmatic client tell an edit of
++ * an earlier message from a reply to the one it sent (the inbound id gains
++ * a `:<agent group>` suffix once routed); a terminal client ignores them.
+  *
+  * The `to` and `reply_to` addressing is how admin transports (the bootstrap
+  * script) inject messages targeting any wired channel. `reply_to` is a
+@@ -156,8 +162,16 @@ function createAdapter(): ChannelAdapter {
+       // Forward the runner's failure flag so clients (the setup ping) can tell
+       // a failed run from a real reply without matching notice text.
+       const failureNotice = isFailureNotice(message) || undefined;
++      const { operation, messageId } = (message.content ?? {}) as { operation?: unknown; messageId?: unknown };
+       try {
+-        client.write(JSON.stringify({ text, [FAILURE_NOTICE_FIELD]: failureNotice }) + '\n');
++        client.write(
++          JSON.stringify({
++            text,
++            [FAILURE_NOTICE_FIELD]: failureNotice,
++            operation: typeof operation === 'string' ? operation : undefined,
++            messageId: typeof messageId === 'string' ? messageId : undefined,
++          }) + '\n',
++        );
+       } catch (err) {
+         log.warn('Failed to write to CLI client', { err });
+       }
+@@ -194,7 +208,7 @@ function createAdapter(): ChannelAdapter {
+         const line = buffer.slice(0, idx).trim();
+         buffer = buffer.slice(idx + 1);
+         if (!line) continue;
+-        void handleLine(line, config, claimChatSlot);
++        void handleLine(line, config, claimChatSlot, socket);
+       }
+     });
+ 
+@@ -208,7 +222,12 @@ function createAdapter(): ChannelAdapter {
+     });
+   }
+ 
+-  async function handleLine(line: string, config: ChannelSetup, claimChatSlot: () => void): Promise<void> {
++  async function handleLine(
++    line: string,
++    config: ChannelSetup,
++    claimChatSlot: () => void,
++    socket: net.Socket,
++  ): Promise<void> {
+     let payload: {
+       text?: unknown;
+       to?: unknown;
+@@ -259,9 +278,15 @@ function createAdapter(): ChannelAdapter {
+     // Plain chat — claim the slot (evicting any prior client) and route via
+     // the standard onInbound path (adapter injects its own channelType).
+     claimChatSlot();
++    const id = `cli-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
++    try {
++      socket.write(JSON.stringify({ accepted: id }) + '\n');
++    } catch (err) {
++      log.warn('Failed to acknowledge CLI message', { err });
++    }
+     try {
+       await config.onInbound(PLATFORM_ID, null, {
+-        id: `cli-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
++        id,
+         kind: 'chat',
+         timestamp: new Date().toISOString(),
+         content: {

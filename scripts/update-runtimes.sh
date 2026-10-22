@@ -398,6 +398,11 @@ install_binary() {
 # Returns 1 (with warn) if not supported for cross-compile.
 can_build_for_target() {
   local shell="$1" target="$2"
+  # NanoClaw runs on Linux and macOS only (Unix sockets, bash container scripts).
+  if [[ "$shell" == nanoclaw && "$target" == windows-* ]]; then
+    warn "nanoclaw: not a Windows runtime"
+    return 1
+  fi
   # Native builds are always fine.
   if [[ "$target" == "$HOST_TARGET" ]]; then return 0; fi
   case "$shell" in
@@ -405,8 +410,10 @@ can_build_for_target() {
       # Go cross-compiles to any target trivially.
       return 0 ;;
     nanoclaw)
-      # Pure JS tsc bundle — platform-independent.
-      return 0 ;;
+      # A built source tree whose node_modules holds per-platform optional
+      # deps — native builds only (handled above).
+      warn "nanoclaw: the runtime tree is built natively only, not for $target"
+      return 1 ;;
     openclaw|nemoclaw)
       # bun --compile supports cross-targets (bun-<os>-<arch>[-musl]).
       have bun || { warn "$shell: bun required for cross-compile to $target"; return 1; }
@@ -552,90 +559,43 @@ build_zeroclaw() {
 
 build_nanoclaw() {
   local dir="$SRC_DIR/nanoclaw" out="$1"
-  require_tool npm "install: https://nodejs.org" || return 1
+  require_tool pnpm "install: npm install -g pnpm" || return 1
+  require_tool node "install: https://nodejs.org" || return 1
 
-  # better-sqlite3 is a native Node module (.node binary). When nanoclaw
-  # is compiled with `bun build --compile`, the bun virtual fs has no
-  # node_modules layout, so the `bindings` package's runtime resolver
-  # walks up looking for package.json and crashes:
-  #   "Could not find module root given file: node_modules/bindings/bindings.js"
-  # Swap to `bun:sqlite` — Bun's built-in SQLite, API-compatible with the
-  # subset nanoclaw uses (Database/.prepare/.run/.get/.all/.exec/.pragma).
-  # Also drop better-sqlite3 from package.json so `npm install` doesn't try
-  # to compile its native binding (which is unused after the patch).
-  if [[ -f "$dir/package.json" ]]; then
-    info "nanoclaw: patching better-sqlite3 → bun:sqlite (native deps incompatible with bun --compile)"
-    "$PYTHON" - "$dir" <<'PY'
-import json, os, re, sys
-root = sys.argv[1]
+  # NanoClaw v2 is a checkout-rooted app, not a single binary: at startup it
+  # reads package.json, templates/, container/agent-runner and
+  # container/skills from its working directory, keeps its state there, and
+  # builds its agent image from container/. A bundled onefile exits at once
+  # ("ENOENT … package.json"). So the published nanoclaw-<target> asset is a
+  # gzip'd tar of the built tree — dist/ plus production node_modules — that
+  # VIMS unpacks and stages one root per instance from.
+  #
+  # node_modules carries per-platform optional dependencies, so the tree is
+  # built natively only (can_build_for_target). Windows is not a NanoClaw
+  # platform (Unix sockets, bash container scripts).
 
-# 1. Drop better-sqlite3 + its types from package.json so npm install doesn't
-#    attempt the native compile of an unused dep.
-# Explicit encoding everywhere below: PYTHONUTF8=1 is exported by this script,
-# but relying on an env var for correctness means anyone running the patch by
-# hand on Windows silently gets cp1252 and a UnicodeDecodeError.
-pj_path = os.path.join(root, 'package.json')
-pj = json.load(open(pj_path, encoding='utf-8'))
-for section in ('dependencies', 'devDependencies', 'optionalDependencies', 'peerDependencies'):
-    if section in pj:
-        for k in ('better-sqlite3', '@types/better-sqlite3'):
-            pj[section].pop(k, None)
-json.dump(pj, open(pj_path, 'w', encoding='utf-8'), indent=2)
+  # VIMS patches (patches/nanoclaw): VIMS as the credential gateway, and
+  # reply correlation on the CLI channel VIMS drives turns over.
+  apply_runtime_patches nanoclaw "$dir" || return 1
 
-# 2. Walk every .ts file, rewrite the imports + namespaced types.
-#    - `import Database from 'better-sqlite3'` → `import { Database } from 'bun:sqlite'`
-#    - `import type Database from 'better-sqlite3'` → `import type { Database } from 'bun:sqlite'`
-#    - `Database.Database` → `Database`  (better-sqlite3 used the namespace
-#      pattern; bun:sqlite exports the class directly)
-import_default = re.compile(r"import\s+Database\s+from\s+['\"]better-sqlite3['\"]\s*;?")
-import_type    = re.compile(r"import\s+type\s+Database\s+from\s+['\"]better-sqlite3['\"]\s*;?")
-ns_type        = re.compile(r"\bDatabase\.Database\b")
-# .pragma('X = Y')  →  .exec('PRAGMA X = Y')
-# better-sqlite3 has a typed .pragma() convenience; bun:sqlite does not.
-# Match single-arg string-literal calls; multi-arg or dynamic-string calls
-# are reported as warnings (none in current upstream, but future-proof).
-pragma_call = re.compile(r"\.pragma\(\s*(['\"])([^'\"]+)\1\s*\)")
+  # NanoClaw is a pnpm project (packageManager, pnpm-lock.yaml, and the
+  # minimumReleaseAge supply-chain gate in pnpm-workspace.yaml); npm
+  # resolving its secondary package-lock died on linux-arm64 with
+  # "Cannot read properties of null (reading 'edgesOut')".
+  ( cd "$dir" && pnpm install --frozen-lockfile 2>&1 && pnpm run build 2>&1 ) | tee -a "$RUNTIME_LOG"
+  [[ "${PIPESTATUS[0]}" -ne 0 ]] && { err "nanoclaw: pnpm install/build failed"; return 1; }
+  [[ -f "$dir/dist/index.js" && -f "$dir/dist/gateway-providers/vims.js" ]] \
+    || { err "nanoclaw: build output incomplete (dist/index.js, dist/gateway-providers/vims.js)"; return 1; }
 
-n_files = 0
-for d, _, files in os.walk(os.path.join(root, 'src')):
-    for f in files:
-        if not f.endswith('.ts'):
-            continue
-        p = os.path.join(d, f)
-        # newline='' on both ends so a CRLF source file is not silently rewritten
-        # with different line endings than it arrived with.
-        s = open(p, encoding='utf-8', newline='').read()
-        orig = s
-        s = import_type.sub("import type { Database } from 'bun:sqlite';", s)
-        s = import_default.sub("import { Database } from 'bun:sqlite';", s)
-        s = ns_type.sub('Database', s)
-        s = pragma_call.sub(lambda m: f".exec({m.group(1)}PRAGMA {m.group(2)}{m.group(1)})", s)
-        if s != orig:
-            open(p, 'w', encoding='utf-8', newline='').write(s)
-            n_files += 1
-# Sanity-check: any unhandled .pragma( call left?
-import subprocess
-leftover = subprocess.run(
-    ['grep', '-rn', r'\.pragma(', os.path.join(root, 'src')],
-    capture_output=True, text=True,
-).stdout.strip()
-if leftover:
-    sys.stderr.write(f"nanoclaw: WARNING — unconverted .pragma() calls remain:\n{leftover}\n")
-print(f"nanoclaw: patched {n_files} TypeScript file(s)")
-PY
-  fi
-
-  # Install deps (no better-sqlite3 native compile now). Skip `npm run build`
-  # — we feed src/index.ts directly to bun, which handles TS natively and
-  # produces a working onefile binary with bun:sqlite linked in.
-  ( cd "$dir" && npm install --no-audit --no-fund --ignore-scripts 2>&1 ) \
-    | tee -a "$RUNTIME_LOG"
-  [[ "${PIPESTATUS[0]}" -ne 0 ]] && { err "nanoclaw: npm install failed"; return 1; }
-
-  local entry="$dir/src/index.ts"
-  [[ -f "$entry" ]] || { err "nanoclaw: src/index.ts missing"; return 1; }
-  bundle_node_entry "$dir" "$entry" "$dir/nanoclaw.bundle.mjs" || return 1
-  install_binary nanoclaw "$dir/nanoclaw.bundle.mjs"
+  # Written beside the checkout: tar fails ("file changed as we read it")
+  # when its output grows inside the tree it is reading. Leftovers of the
+  # retired onefile build are not part of the tree.
+  rm -f "$dir/nanoclaw.bundle.mjs" "$dir/index.js.map"
+  local tarball="$dir.tree.tar.gz"
+  tar -C "$dir" --exclude=./.git --exclude=./data --exclude=./groups --exclude=./store \
+      --exclude=./logs --exclude=./.env -czf "$tarball" . \
+    || { err "nanoclaw: packaging the runtime tree failed"; return 1; }
+  install_binary nanoclaw "$tarball"
 }
 
 build_nemoclaw() {
@@ -699,9 +659,18 @@ apply_runtime_patches() {
   local name="$1" dir="$2"
   local patch_dir="$SCRIPT_DIR/../patches/$name"
   [[ -d "$patch_dir" ]] || return 0
-  local p
+  local p created
   for p in "$patch_dir"/*.patch; do
     [[ -e "$p" ]] || continue
+    # sync_source stashes tracked edits only, so files a patch creates
+    # survive from the previous build as untracked leftovers and block both
+    # the forward and the reverse check. Untracked copies of those paths are
+    # ours; drop them so the patch applies to the fresh checkout.
+    while read -r created; do
+      if [[ -e "$dir/$created" ]] && ! git -C "$dir" ls-files --error-unmatch -- "$created" >/dev/null 2>&1; then
+        rm -f "$dir/$created"
+      fi
+    done < <(git -C "$dir" apply --summary "$p" | awk '$1 == "create" {print $4}')
     if git -C "$dir" apply --check "$p" 2>/dev/null; then
       git -C "$dir" apply "$p" || { err "$name: applying $(basename "$p") failed"; return 1; }
       info "$name: applied $(basename "$p")"
