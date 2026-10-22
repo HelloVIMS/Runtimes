@@ -370,14 +370,21 @@ jobs:
           MATRIX_CROSS: ${{ matrix.cross }}
           MATRIX_CARGO_JOBS: ${{ matrix.cargo_jobs }}
           SKIP_CACHED: ${{ steps.skip.outputs.list }}
-          # Honored by every cargo invocation (zeroclaw + openfang). Cargo
-          # rejects an empty CARGO_BUILD_JOBS="" with `Number of parallel jobs
-          # should be \`default\` or a number`, so when matrix.cargo_jobs is
-          # unset (everywhere except linux-arm64 OOM mitigation), pass the
-          # literal string "default" and let cargo pick its own concurrency.
-          CARGO_BUILD_JOBS: ${{ matrix.cargo_jobs || 'default' }}
         run: |
           set -uo pipefail
+          # CARGO_BUILD_JOBS caps every cargo invocation (zeroclaw, openfang,
+          # and Rust-backed Python wheels such as cryptography built during
+          # the mirofish install). Export it only for the linux-arm64 OOM
+          # mitigation: the old unconditional "default" placeholder is not
+          # understood by the older cargo maturin runs under Rosetta for
+          # darwin-amd64 ("failed to parse environment variable
+          # CARGO_BUILD_JOBS: invalid digit"), which failed every mirofish
+          # build there; unset, cargo picks its own concurrency.
+          if [[ -n "${MATRIX_CARGO_JOBS:-}" ]]; then
+            export CARGO_BUILD_JOBS="$MATRIX_CARGO_JOBS"
+          else
+            unset CARGO_BUILD_JOBS
+          fi
           mkdir -p ci-logs
           BUILD_LOG="ci-logs/build-${MATRIX_TARGET}.log"
           : > "$BUILD_LOG"
