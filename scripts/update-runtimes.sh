@@ -898,22 +898,20 @@ build_hermes() {
 
   # Hermes is a Python CLI (hermes_cli.main:main entry point). We bundle it
   # into a standalone PyInstaller binary on every platform so end-users get
-  # a shippable executable — no pipx or system Python required. Previously
-  # this produced a bash launcher that required users to have hermes-agent
-  # pipx-installed separately, which (a) nobody does post-VIMS-install,
-  # and (b) doesn't run on Windows where `#!/usr/bin/env bash` is inert.
-
-  local arch_prefix=() py_bin=""
+  # a shippable executable — no pipx or system Python required.
+  #
+  # Upstream installs only through uv + uv.lock (its setup.py refuses
+  # wheel/sdist builds outside Nix, and its pins target CPython 3.14), so
+  # every target uses `uv sync`. The darwin-amd64 cross build on an arm64
+  # host runs the same flow with a uv-managed x86_64 interpreter and runs
+  # PyInstaller under Rosetta 2.
+  require_tool uv "install: curl -LsSf https://astral.sh/uv/install.sh | sh" || return 1
+  local arch_prefix=() uv_python="" target_arch_args=()
   if [[ "$HOST_TARGET" == "darwin-arm64" && "$CURRENT_TARGET" == "darwin-amd64" ]]; then
-    if [[ -z "${X86_PYTHON:-}" || ! -x "${X86_PYTHON}" ]]; then
-      err "hermes: cross-build requires X86_PYTHON pointing to x86_64 python (got: '${X86_PYTHON:-unset}')"
-      return 1
-    fi
     arch_prefix=(arch -x86_64)
-    py_bin="$X86_PYTHON"
-    info "hermes: cross-building darwin-amd64 via Rosetta 2 using $py_bin"
-  else
-    require_tool uv "install: curl -LsSf https://astral.sh/uv/install.sh | sh" || return 1
+    uv_python="cpython-3.14-macos-x86_64-none"
+    target_arch_args=(--target-arch x86_64)
+    info "hermes: cross-building darwin-amd64 via Rosetta 2 with $uv_python"
   fi
 
   (
@@ -921,53 +919,33 @@ build_hermes() {
     local extras
     extras="$(hermes_extras pyproject.toml)" || { err "hermes: cannot resolve extras"; return 1; }
     info "hermes: extras $extras"
-    if [[ ${#arch_prefix[@]} -gt 0 ]]; then
-      # Rosetta cross path: plain pip + venv with the x86_64 Python.
-      "${arch_prefix[@]}" "$py_bin" -m venv .venv-x86 2>&1 \
-        || { err "hermes: failed to create x86_64 venv"; return 1; }
-      "${arch_prefix[@]}" .venv-x86/bin/pip install --upgrade pip pyinstaller 2>&1 \
-        || { err "hermes: failed to install pip+pyinstaller in x86_64 venv"; return 1; }
-      "${arch_prefix[@]}" .venv-x86/bin/pip install ".[$extras]" 2>&1 \
-        || { err "hermes: pip install .[$extras] failed in x86_64 venv"; return 1; }
-      "${arch_prefix[@]}" .venv-x86/bin/pyinstaller \
-        --name hermes \
-        --onefile \
-        --noconfirm \
-        --clean \
-        --target-arch x86_64 \
-        --collect-all hermes \
-        --collect-all hermes_cli \
-        --collect-all gateway \
-        --collect-all aiohttp \
-        --copy-metadata hermes-agent \
-        --hidden-import hermes_cli.main \
-        --paths . \
-        -c hermes_cli/main.py 2>&1
-    else
-      # Native path: uv sync then uv pip for pyinstaller.
-      local extra_args=()
-      IFS=',' read -ra _ex <<< "$extras"
-      for e in "${_ex[@]}"; do extra_args+=(--extra "$e"); done
-      uv sync "${extra_args[@]}" 2>&1 || { err "hermes: uv sync failed"; return 1; }
-      uv pip install --quiet pyinstaller 2>&1 \
-        || { err "hermes: uv pip install pyinstaller failed"; return 1; }
-      local pyinst=".venv/bin/pyinstaller"
-      [[ -x "$pyinst" ]] || pyinst=".venv/Scripts/pyinstaller.exe"
-      [[ -x "$pyinst" ]] || { err "hermes: pyinstaller binary missing after uv pip install"; return 1; }
-      "$pyinst" \
-        --name hermes \
-        --onefile \
-        --noconfirm \
-        --clean \
-        --collect-all hermes \
-        --collect-all hermes_cli \
-        --collect-all gateway \
-        --collect-all aiohttp \
-        --copy-metadata hermes-agent \
-        --hidden-import hermes_cli.main \
-        --paths . \
-        -c hermes_cli/main.py 2>&1
+    local sync_args=()
+    IFS=',' read -ra _ex <<< "$extras"
+    for e in "${_ex[@]}"; do sync_args+=(--extra "$e"); done
+    if [[ -n "$uv_python" ]]; then
+      rm -rf .venv
+      sync_args+=(--python "$uv_python")
     fi
+    uv sync "${sync_args[@]}" 2>&1 || { err "hermes: uv sync failed"; return 1; }
+    uv pip install --quiet --python .venv pyinstaller 2>&1 \
+      || { err "hermes: uv pip install pyinstaller failed"; return 1; }
+    local pyinst=".venv/bin/pyinstaller"
+    [[ -x "$pyinst" ]] || pyinst=".venv/Scripts/pyinstaller.exe"
+    [[ -x "$pyinst" ]] || { err "hermes: pyinstaller binary missing after uv pip install"; return 1; }
+    ${arch_prefix[@]+"${arch_prefix[@]}"} "$pyinst" \
+      --name hermes \
+      --onefile \
+      --noconfirm \
+      --clean \
+      ${target_arch_args[@]+"${target_arch_args[@]}"} \
+      --collect-all hermes \
+      --collect-all hermes_cli \
+      --collect-all gateway \
+      --collect-all aiohttp \
+      --copy-metadata hermes-agent \
+      --hidden-import hermes_cli.main \
+      --paths . \
+      -c hermes_cli/main.py 2>&1
     # onefile output: dist/hermes (or dist/hermes.exe on Windows)
     local out_name="hermes"
     [[ "$CURRENT_TARGET" == windows-* ]] && out_name="hermes.exe"
