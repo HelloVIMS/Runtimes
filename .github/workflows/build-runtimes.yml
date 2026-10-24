@@ -91,9 +91,14 @@ jobs:
           - target: darwin-arm64
             os: macos-14
             cross: 'false'
+          # Native Intel runner: the Python ecosystem has dropped macOS x86_64
+          # wheels (cryptography 50 ships arm64 only) and Rosetta builds of
+          # them need an x86_64 OpenSSL that Homebrew no longer installs on
+          # Apple Silicon. On Intel, wheels build from source against the
+          # runner's own Homebrew OpenSSL and every shell builds natively.
           - target: darwin-amd64
-            os: macos-14
-            cross: 'true'
+            os: macos-15-intel
+            cross: 'false'
           - target: linux-amd64
             os: ubuntu-latest
             cross: 'false'
@@ -145,7 +150,7 @@ jobs:
           toolchain: ${{ env.RUST_VERSION }}
 
       - name: Add Rust cross target (darwin-amd64)
-        if: matrix.target == 'darwin-amd64'
+        if: matrix.target == 'darwin-amd64' && matrix.cross == 'true'
         run: rustup target add x86_64-apple-darwin
         shell: bash
 
@@ -159,7 +164,7 @@ jobs:
       # update-environment is off so the native interpreter from the later
       # "Set up Python" step stays the default on PATH.
       - name: Install Rosetta 2 (darwin-amd64 cross)
-        if: matrix.target == 'darwin-amd64'
+        if: matrix.target == 'darwin-amd64' && matrix.cross == 'true'
         shell: bash
         run: |
           set -euxo pipefail
@@ -168,7 +173,7 @@ jobs:
 
       - name: Set up x86_64 Python (darwin-amd64 cross)
         id: x86-python
-        if: matrix.target == 'darwin-amd64'
+        if: matrix.target == 'darwin-amd64' && matrix.cross == 'true'
         uses: actions/setup-python@v5
         with:
           python-version: '3.11'
@@ -176,7 +181,7 @@ jobs:
           update-environment: false
 
       - name: Export X86_PYTHON (darwin-amd64 cross)
-        if: matrix.target == 'darwin-amd64'
+        if: matrix.target == 'darwin-amd64' && matrix.cross == 'true'
         shell: bash
         env:
           X86_PYTHON_PATH: ${{ steps.x86-python.outputs.python-path }}
