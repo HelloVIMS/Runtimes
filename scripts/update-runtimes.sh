@@ -876,6 +876,23 @@ build_picoclaw() {
   install_binary picoclaw "$dir/$binname"
 }
 
+# hermes_extras: what the API server VIMS drives needs — aiohttp for
+# gateway/platforms/api_server.py, plus cron and mcp. Without aiohttp the
+# binary started but logged "No adapter available for api_server" and
+# served nothing. Upstream moves aiohttp between extras (homeassistant,
+# later sms), so take the ones the checked-out pyproject defines.
+hermes_extras() {
+  python3 - "$1" <<'PY'
+import sys, tomllib
+opt = tomllib.load(open(sys.argv[1], "rb"))["project"].get("optional-dependencies", {})
+want = [e for e in ("cron", "mcp") if e in opt]
+http = next((e for e in ("sms", "homeassistant") if e in opt and any(d.startswith("aiohttp") for d in opt[e])), None)
+if http is None:
+    sys.exit("hermes: no optional extra provides aiohttp (API server)")
+print(",".join(want + [http]))
+PY
+}
+
 build_hermes() {
   local dir="$SRC_DIR/hermes" out="$1"
 
@@ -901,14 +918,17 @@ build_hermes() {
 
   (
     cd "$dir"
+    local extras
+    extras="$(hermes_extras pyproject.toml)" || { err "hermes: cannot resolve extras"; return 1; }
+    info "hermes: extras $extras"
     if [[ ${#arch_prefix[@]} -gt 0 ]]; then
       # Rosetta cross path: plain pip + venv with the x86_64 Python.
       "${arch_prefix[@]}" "$py_bin" -m venv .venv-x86 2>&1 \
         || { err "hermes: failed to create x86_64 venv"; return 1; }
       "${arch_prefix[@]}" .venv-x86/bin/pip install --upgrade pip pyinstaller 2>&1 \
         || { err "hermes: failed to install pip+pyinstaller in x86_64 venv"; return 1; }
-      "${arch_prefix[@]}" .venv-x86/bin/pip install . 2>&1 \
-        || { err "hermes: pip install . failed in x86_64 venv"; return 1; }
+      "${arch_prefix[@]}" .venv-x86/bin/pip install ".[$extras]" 2>&1 \
+        || { err "hermes: pip install .[$extras] failed in x86_64 venv"; return 1; }
       "${arch_prefix[@]}" .venv-x86/bin/pyinstaller \
         --name hermes \
         --onefile \
@@ -917,13 +937,18 @@ build_hermes() {
         --target-arch x86_64 \
         --collect-all hermes \
         --collect-all hermes_cli \
+        --collect-all gateway \
+        --collect-all aiohttp \
         --copy-metadata hermes-agent \
         --hidden-import hermes_cli.main \
         --paths . \
         -c hermes_cli/main.py 2>&1
     else
       # Native path: uv sync then uv pip for pyinstaller.
-      uv sync 2>&1 || { err "hermes: uv sync failed"; return 1; }
+      local extra_args=()
+      IFS=',' read -ra _ex <<< "$extras"
+      for e in "${_ex[@]}"; do extra_args+=(--extra "$e"); done
+      uv sync "${extra_args[@]}" 2>&1 || { err "hermes: uv sync failed"; return 1; }
       uv pip install --quiet pyinstaller 2>&1 \
         || { err "hermes: uv pip install pyinstaller failed"; return 1; }
       local pyinst=".venv/bin/pyinstaller"
@@ -936,6 +961,8 @@ build_hermes() {
         --clean \
         --collect-all hermes \
         --collect-all hermes_cli \
+        --collect-all gateway \
+        --collect-all aiohttp \
         --copy-metadata hermes-agent \
         --hidden-import hermes_cli.main \
         --paths . \
