@@ -944,8 +944,11 @@ build_hermes() {
 
   (
     cd "$dir"
+    rm -rf .vims-out
     local extras
-    extras="$(hermes_extras pyproject.toml)" || { err "hermes: cannot resolve extras"; return 1; }
+    # Windows Python ends lines with \r\n; a trailing \r rides into every
+    # argument (PyInstaller rejected "--collect-all\r").
+    extras="$(hermes_extras pyproject.toml | tr -d '\r')" || { err "hermes: cannot resolve extras"; return 1; }
     info "hermes: extras $extras"
     local sync_args=()
     IFS=',' read -ra _ex <<< "$extras"
@@ -961,8 +964,7 @@ build_hermes() {
     [[ -x "$pyinst" ]] || pyinst=".venv/Scripts/pyinstaller.exe"
     [[ -x "$pyinst" ]] || { err "hermes: pyinstaller binary missing after uv pip install"; return 1; }
     local collect=()
-    while IFS= read -r a; do collect+=("$a"); done < <(hermes_pyinstaller_collect .) \
-      || { err "hermes: cannot resolve packages to bundle"; return 1; }
+    while IFS= read -r a; do collect+=("${a%$'\r'}"); done < <(hermes_pyinstaller_collect .)
     [[ ${#collect[@]} -gt 0 ]] || { err "hermes: no packages to bundle"; return 1; }
     info "hermes: bundling $(printf '%s ' "${collect[@]}" | grep -o -- '--collect-all [^ ]*' | cut -d' ' -f2 | tr '\n' ' ')"
     ${arch_prefix[@]+"${arch_prefix[@]}"} "$pyinst" \
@@ -976,18 +978,19 @@ build_hermes() {
       --copy-metadata hermes-agent \
       --hidden-import hermes_cli.main \
       --paths . \
-      -c hermes_cli/main.py 2>&1
+      -c hermes_cli/main.py 2>&1 || { err "hermes: pyinstaller failed"; return 1; }
     # onefile output: dist/hermes (or dist/hermes.exe on Windows)
     local out_name="hermes"
     [[ "$CURRENT_TARGET" == windows-* ]] && out_name="hermes.exe"
-    if [[ -f "dist/$out_name" ]]; then
-      cp -f "dist/$out_name" "$dir/hermes"
-      chmod +x "$dir/hermes" 2>/dev/null || true
-    fi
+    [[ -f "dist/$out_name" ]] || { err "hermes: pyinstaller produced no dist/$out_name"; return 1; }
+    mkdir -p .vims-out && cp -f "dist/$out_name" .vims-out/hermes && chmod +x .vims-out/hermes 2>/dev/null
   ) | tee -a "$RUNTIME_LOG"
   [[ "${PIPESTATUS[0]}" -ne 0 ]] && { err "hermes: build failed"; return 1; }
-  [[ -s "$dir/hermes" ]] || { err "hermes: no binary produced at $dir/hermes"; return 1; }
-  install_binary hermes "$dir/hermes"
+  # Not "$dir/hermes": upstream ships its own launcher script there, and a
+  # failed build used to install that 273-byte script as the binary.
+  local built="$dir/.vims-out/hermes"
+  [[ -s "$built" ]] || { err "hermes: no binary produced at $built"; return 1; }
+  install_binary hermes "$built"
 }
 
 build_openfang() {
