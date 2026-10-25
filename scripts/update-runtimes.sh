@@ -917,7 +917,8 @@ for p in pkgs:
     args += ["--collect-all", p]
 for m in mods:
     args += ["--hidden-import", m]
-print("\n".join(args))
+# Bytes, not print(): Windows Python's text-mode stdout turns \n into \r\n.
+sys.stdout.buffer.write("\n".join(args).encode() + b"\n")
 PY
 }
 
@@ -964,7 +965,7 @@ build_hermes() {
     [[ -x "$pyinst" ]] || pyinst=".venv/Scripts/pyinstaller.exe"
     [[ -x "$pyinst" ]] || { err "hermes: pyinstaller binary missing after uv pip install"; return 1; }
     local collect=()
-    while IFS= read -r a; do collect+=("${a%$'\r'}"); done < <(hermes_pyinstaller_collect .)
+    while IFS= read -r a; do a="${a//$'\r'/}"; [[ -n "$a" ]] && collect+=("$a"); done < <(hermes_pyinstaller_collect .)
     [[ ${#collect[@]} -gt 0 ]] || { err "hermes: no packages to bundle"; return 1; }
     info "hermes: bundling $(printf '%s ' "${collect[@]}" | grep -o -- '--collect-all [^ ]*' | cut -d' ' -f2 | tr '\n' ' ')"
     ${arch_prefix[@]+"${arch_prefix[@]}"} "$pyinst" \
