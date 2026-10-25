@@ -455,6 +455,7 @@ jobs:
           [[ "$TARGET" == "windows-amd64" ]] && ext=".exe"
           bin_dir="dist/$TARGET"
           uploaded=0
+          source scripts/asset-format.sh
           for pair in \
             "openclaw:$SHA_OPENCLAW" \
             "zeroclaw:$SHA_ZEROCLAW" \
@@ -469,6 +470,7 @@ jobs:
             [[ -z "$sha" || "$sha" == "unknown" ]] && { echo "skip $shell_name: no SHA"; continue; }
             bin="$bin_dir/${shell_name}${ext}"
             [[ -f "$bin" && -s "$bin" ]] || { echo "skip $shell_name: $bin missing or empty"; continue; }
+            asset_format_ok "$bin" || { echo "::error::refusing $shell_name for $TARGET: $bin ($(wc -c < "$bin" | tr -d ' ') bytes) is not an executable or archive"; continue; }
             sha12="${sha:0:12}"
             tag="${shell_name}-${sha12}"
             asset="${shell_name}-${TARGET}${ext}"
@@ -546,6 +548,7 @@ jobs:
         shell: bash
         run: |
           set -uo pipefail
+          source scripts/asset-format.sh
           mkdir -p staging
           declare -A SHAS=(
             [openclaw]="$SHA_OPENCLAW"
@@ -601,16 +604,19 @@ jobs:
                 continue
               fi
               if gh release download "$tag" --pattern "$asset" \
-                   --output "staging/$asset" --clobber 2>/dev/null; then
+                   --output "staging/$asset" --clobber 2>/dev/null \
+                 && asset_format_ok "staging/$asset"; then
                 size=$(wc -c < "staging/$asset" | tr -d ' ')
                 echo "  ✓ $asset ($size bytes) ← $tag"
                 downloaded=$((downloaded + 1))
               elif gh release download latest --pattern "$asset" \
-                     --output "staging/$asset" --clobber 2>/dev/null; then
+                     --output "staging/$asset" --clobber 2>/dev/null \
+                   && asset_format_ok "staging/$asset"; then
                 size=$(wc -c < "staging/$asset" | tr -d ' ')
                 echo "  ↺ $asset ($size bytes) ← previous latest (tag $tag not published)"
                 preserved=$((preserved + 1))
               else
+                rm -f "staging/$asset"
                 missing+=("$asset")
               fi
             done
