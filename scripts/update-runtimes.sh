@@ -893,6 +893,34 @@ print(",".join(want + [http]))
 PY
 }
 
+# hermes_pyinstaller_collect: PyInstaller args that bundle every package the
+# upstream wheel ships. Hermes reaches much of its code by module name at run
+# time (tools.connectors maps tool names to modules through strings, plugins
+# and providers are discovered), which static analysis never sees: collecting
+# only hermes_cli and gateway shipped a binary whose tool calls failed with
+# "No module named 'tools.connectors.dispatch'". The package list is the one
+# pyproject gives setuptools, and the root single-file modules are the ones
+# upstream's setup.py derives from the tree, so both follow upstream's layout.
+hermes_pyinstaller_collect() {
+  python3 - "$1" <<'PY'
+import os, sys, tomllib
+root = sys.argv[1]
+cfg = tomllib.load(open(os.path.join(root, "pyproject.toml"), "rb"))
+include = cfg.get("tool", {}).get("setuptools", {}).get("packages", {}).get("find", {}).get("include", [])
+pkgs = sorted({p.split(".")[0] for p in include if p and not p.startswith("tests")})
+if not pkgs:
+    sys.exit("hermes: pyproject lists no packages to bundle")
+mods = sorted(f[:-3] for f in os.listdir(root)
+              if f.endswith(".py") and f not in ("setup.py", "conftest.py") and not f.startswith("test_"))
+args = []
+for p in pkgs:
+    args += ["--collect-all", p]
+for m in mods:
+    args += ["--hidden-import", m]
+print("\n".join(args))
+PY
+}
+
 build_hermes() {
   local dir="$SRC_DIR/hermes" out="$1"
 
@@ -932,15 +960,18 @@ build_hermes() {
     local pyinst=".venv/bin/pyinstaller"
     [[ -x "$pyinst" ]] || pyinst=".venv/Scripts/pyinstaller.exe"
     [[ -x "$pyinst" ]] || { err "hermes: pyinstaller binary missing after uv pip install"; return 1; }
+    local collect=()
+    while IFS= read -r a; do collect+=("$a"); done < <(hermes_pyinstaller_collect .) \
+      || { err "hermes: cannot resolve packages to bundle"; return 1; }
+    [[ ${#collect[@]} -gt 0 ]] || { err "hermes: no packages to bundle"; return 1; }
+    info "hermes: bundling $(printf '%s ' "${collect[@]}" | grep -o -- '--collect-all [^ ]*' | cut -d' ' -f2 | tr '\n' ' ')"
     ${arch_prefix[@]+"${arch_prefix[@]}"} "$pyinst" \
       --name hermes \
       --onefile \
       --noconfirm \
       --clean \
       ${target_arch_args[@]+"${target_arch_args[@]}"} \
-      --collect-all hermes \
-      --collect-all hermes_cli \
-      --collect-all gateway \
+      "${collect[@]}" \
       --collect-all aiohttp \
       --copy-metadata hermes-agent \
       --hidden-import hermes_cli.main \
