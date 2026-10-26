@@ -997,6 +997,9 @@ build_hermes() {
 build_openfang() {
   local dir="$SRC_DIR/openfang" out="$1"
   require_tool cargo "install: https://rustup.rs" || return 1
+  # VIMS patches (patches/openfang): trust the system certificate store as
+  # well as the bundled roots, so HTTPS works behind VIMS' egress proxy.
+  apply_runtime_patches openfang "$dir" || return 1
   local target_args="" triple="" release_dir="$dir/target/release"
   if [[ "$CURRENT_TARGET" != "$HOST_TARGET" ]]; then
     triple="$(rust_triple_for "$CURRENT_TARGET")" || { err "openfang: unsupported target $CURRENT_TARGET"; return 1; }

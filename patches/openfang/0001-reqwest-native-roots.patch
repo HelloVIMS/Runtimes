@@ -1,0 +1,23 @@
+From: VIMS Coder <346484346+VIMS-Coder@users.noreply.github.com>
+Subject: [PATCH] reqwest: trust the system certificate store too
+
+reqwest's `rustls-tls` feature trusts only the roots compiled into the
+binary, ignoring SSL_CERT_FILE and the system store. Behind a TLS-
+inspecting egress proxy (VIMS' sandbox envelope, a corporate proxy) every
+HTTPS request then fails with "unknown certificate authority".
+`rustls-tls-native-roots` adds the platform store (rustls-native-certs,
+which honours SSL_CERT_FILE / SSL_CERT_DIR) next to the bundled roots.
+
+diff --git a/Cargo.toml b/Cargo.toml
+index 554d9a3..0a2908a 100644
+--- a/Cargo.toml
++++ b/Cargo.toml
+@@ -62,7 +62,7 @@ clap = { version = "4", features = ["derive"] }
+ clap_complete = "4"
+ 
+ # HTTP client (for LLM drivers)
+-reqwest = { version = "0.12", default-features = false, features = ["json", "stream", "multipart", "rustls-tls", "gzip", "deflate", "brotli"] }
++reqwest = { version = "0.12", default-features = false, features = ["json", "stream", "multipart", "rustls-tls", "rustls-tls-native-roots", "gzip", "deflate", "brotli"] }
+ rustls = { version = "0.23", default-features = false, features = ["ring"] }
+ 
+ # Async trait
