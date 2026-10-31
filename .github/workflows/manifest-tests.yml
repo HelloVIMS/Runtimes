@@ -1,0 +1,26 @@
+name: Manifest tests
+on:
+  pull_request:
+    paths:
+      - 'scripts/release_manifest.py'
+      - 'scripts/asset-format.sh'
+      - 'tests/**'
+      - '.github/workflows/build-runtimes.yml'
+      - '.github/workflows/manifest-tests.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'scripts/release_manifest.py'
+      - 'scripts/asset-format.sh'
+      - 'tests/**'
+      - '.github/workflows/build-runtimes.yml'
+      - '.github/workflows/manifest-tests.yml'
+permissions:
+  contents: read
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - run: python3 -m unittest discover -s tests -v

@@ -112,3 +112,25 @@ of the specific shell you redistribute.
 These binaries are reproducible from the commit SHA referenced in the
 release tag. Build provenance is recorded in each release's notes (CI run
 URL + timestamp). 
+
+## Rolling-release asset provenance
+`manifest.json` retains its existing `updated` and `shells` fields. The latter
+records **resolved upstream heads**, not necessarily the version of every
+platform binary: a partial build can preserve older files from `latest`.
+The additive `assetSchema: 1` and `assets` map identify each actual staged file
+with SHA-256, byte size, header format, runtime, target, download source, and
+`sourceTag`/`sourceSha`. Preserved files inherit a source tag/commit only when a
+previous per-asset manifest matches their exact hash, size and runtime/target.
+Legacy per-shell metadata is insufficient; those source fields remain `null`
+rather than misattributing older bytes to the new upstream head. Consumers
+must tolerate unknown provenance and use per-asset fields when pinning.
+`SHA256SUMS` covers the runtime files and `manifest.json`. A checksum detects
+byte differences; it is not a signature, proof of build reproducibility, or
+independent attestation of source-to-binary correspondence. Header format is a
+compatibility check, not a malware scan. Release tags remain maintainer-managed.
+The manifest helper has no network or publishing side effects. Its tests include
+the real consolidation shell step with a mocked `gh` executable, including
+partial-build fallback and validation failure before release deletion:
+```sh
+python3 -m unittest discover -s tests -v
+```
