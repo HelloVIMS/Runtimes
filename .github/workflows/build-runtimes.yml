@@ -586,6 +586,13 @@ jobs:
           # never built at this SHA), fall back to the existing 'latest'
           # release's copy — avoids a partial rebuild silently orphaning
           # unrelated shells from the rolling release.
+          origins="$RUNNER_TEMP/runtime-origins.tsv"
+          previous="$RUNNER_TEMP/previous-runtime-manifest.json"
+          : > "$origins"
+          if ! gh release download latest --pattern manifest.json \
+              --output "$previous" --clobber 2>/dev/null; then
+            printf '{}\n' > "$previous"
+          fi
           downloaded=0
           preserved=0
           missing=()
@@ -608,12 +615,14 @@ jobs:
                  && asset_format_ok "staging/$asset"; then
                 size=$(wc -c < "staging/$asset" | tr -d ' ')
                 echo "  ✓ $asset ($size bytes) ← $tag"
+                printf '%s\t%s\t%s\t%s\t%s\n' "$asset" "$shell_name" "$target" "$tag" "$sha" >> "$origins" || exit 1
                 downloaded=$((downloaded + 1))
               elif gh release download latest --pattern "$asset" \
                      --output "staging/$asset" --clobber 2>/dev/null \
                    && asset_format_ok "staging/$asset"; then
                 size=$(wc -c < "staging/$asset" | tr -d ' ')
                 echo "  ↺ $asset ($size bytes) ← previous latest (tag $tag not published)"
+                printf '%s\t%s\t%s\tprevious-latest\t-\n' "$asset" "$shell_name" "$target" >> "$origins" || exit 1
                 preserved=$((preserved + 1))
               else
                 rm -f "staging/$asset"
@@ -631,13 +640,19 @@ jobs:
             exit 1
           fi
 
+          # Record actual staged bytes and inherited provenance before touching
+          # the existing release. This must fail closed even without set -e.
+          python3 scripts/release_manifest.py --staging staging \
+            --origins "$origins" --previous "$previous" || exit 1
           # Compose stable release notes with current SHA → tag table.
           notes="$RUNNER_TEMP/latest-notes.md"
           {
             echo "# Latest VIMS agent shell runtimes"
             echo ""
             echo "Rolling release. **Always contains the most recent successful build of each shell × platform.**"
-            echo "For reproducible pinning, use the per-SHA prerelease tags listed below."
+            echo 'For per-file pinning use assets[name].sourceTag in manifest.json, not the current-upstream table below.'
+            echo 'Preserved files with unknown provenance have null sourceTag/sourceSha; their bytes are still SHA-256 identified.'
+            echo 'SHA256SUMS covers every runtime file and manifest.json. These checksums are not signed build attestations.'
             echo ""
             echo "Updated: $(date -u +%Y-%m-%dT%H:%M:%SZ)"
             echo ""
