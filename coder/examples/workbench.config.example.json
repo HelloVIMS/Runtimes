@@ -1,0 +1,27 @@
+{
+  "stateDirectory": "/absolute/private/vims-coder-state",
+  "port": 0,
+  "projects": [
+    {
+      "id": "project",
+      "name": "My trusted project",
+      "repository": "/absolute/path/to/project"
+    }
+  ],
+  "drivers": [
+    {
+      "id": "codex-local",
+      "binary": "/absolute/path/to/native/codex",
+      "allowWorkspaceWrites": false,
+      "transport": "app-server-stdio"
+    }
+  ],
+  "profiles": [
+    {
+      "id": "review",
+      "name": "Codex \u252c\u2556 read-only review",
+      "driverId": "codex-local",
+      "model": "owner-selected-model"
+    }
+  ]
+}
