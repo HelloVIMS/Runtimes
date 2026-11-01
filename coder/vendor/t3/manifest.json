@@ -1,0 +1,132 @@
+{
+  "repository": "https://github.com/pingdotgg/t3code",
+  "commit": "575579d68ac4bae09f8426a345d4a3eac1e90c67",
+  "license": "MIT",
+  "files": [
+    {
+      "upstream": "packages/provider-core/src/server/handoffBudget.ts",
+      "gitBlob": "4658bc44fc6d39061a5037c1fc57e2e67cb46a7a",
+      "sourceSha256": "19cc1e5b0bef2092938a2864de79a8483d93f1e2acabed3cad3e0f58ecf36898",
+      "destination": "src/t3/handoffBudget.ts",
+      "adaptedSha256": "834c670a84d8012e1a51ed09709621870f0cd314b013648f23564a26be889308",
+      "changes": [
+        "Type-only imports use local structural contracts; no T3 runtime dependency.",
+        "Effect.Config replaced with an explicit validated VIMS argument.",
+        "Recovery tool name changed to vims_thread_read; budgeting/selection/rendering logic retained."
+      ]
+    },
+    {
+      "upstream": "packages/client-runtime/src/handoff.ts",
+      "gitBlob": "a26c018ad9cdfefea37f73d96b6f4e24ca0a88e4",
+      "sourceSha256": "b490ee9e9d516d6eaa15d03f7a9fe20ac3b717664d1d842eb3aa342dd8e42d8c",
+      "destination": "src/t3/handoff.ts",
+      "adaptedSha256": "6d697e02f2076965987c0ce31c34bcb66a3528d94182262526652fd5cb039fe0",
+      "changes": [
+        "Type-only imports use local structural contracts; no T3 runtime dependency."
+      ]
+    },
+    {
+      "upstream": "apps/server/src/orchestration-v2/QueuedRunOrder.ts",
+      "gitBlob": "72c5e319d69ed017294032272988f1b848eb5f1d",
+      "sourceSha256": "e8a2330a2df90f9a3b60b3c0bc8f77ce33cfb3c4b2e783ed75ba5a7029711c7f",
+      "destination": "src/t3/QueuedRunOrder.ts",
+      "adaptedSha256": "42bd45754ced57166c116d8a15cefe56e23dae3054dab578abd261363abd8581",
+      "changes": [
+        "Type-only imports use local structural contracts; no T3 runtime dependency."
+      ]
+    },
+    {
+      "upstream": "apps/server/src/checkpointing/Diffs.ts",
+      "gitBlob": "c832b62d13ba6ad31fa6237662d7e0b28c416ed0",
+      "sourceSha256": "5165299c99ba67fed952c55048065f9cfd6e5b3df9ed659f59a2a06bca545ba3",
+      "destination": "src/t3/Diffs.ts",
+      "adaptedSha256": "bd1148ef2c8ecca05afa96e7e789aa746403592a1b836e6dbab386a7ee2864c2",
+      "changes": [
+        "Type-only imports use local structural contracts; no T3 runtime dependency."
+      ]
+    },
+    {
+      "upstream": "packages/client-runtime/src/worktreeSetup.ts",
+      "gitBlob": "0992f63fbc036a1706a67aad8bbaa05ce866a0ce",
+      "sourceSha256": "9081fd398373d3f72418fc292133b5a71698a1cdbf479ec7567cc17c075a53c3",
+      "destination": "src/t3/worktreeSetup.ts",
+      "adaptedSha256": "492eb837debc1945b818d137086963baf0f505388b8cbd580541995d332648b3",
+      "changes": [
+        "Type-only imports use local structural contracts; no T3 runtime dependency."
+      ]
+    },
+    {
+      "upstream": "apps/server/src/orchestration-v2/ThreadLiveEventCoalescer.ts",
+      "gitBlob": "b3b8af0e64d967b83a131947453e4bca2bc11955",
+      "sourceSha256": "fb4a35220413b740b28da631aa4fe58629b7cb0823b4d7d58762560204a26837",
+      "destination": "src/t3/liveEvents.ts",
+      "adaptedSha256": "9c27e8e00e8ff57c88daa2e48f7ea5287634dcbf4f5f4e2863c201ea260a336b",
+      "changes": [
+        "Extracted pure coalescibleUpdateKey/coalesceLiveUpdatedEvents and local types. Effect streaming/timer service is not copied or claimed.",
+        "Trimmed extraction-only trailing blank lines; executable logic unchanged."
+      ]
+    },
+    {
+      "upstream": "packages/client-runtime/src/state/threadInbox.ts",
+      "gitBlob": "de9cd822398d031ba5d77d8f6b8218b2f16e6b8e",
+      "sourceSha256": "ad4ee9fc880e37a18ef2621f302f58aa7e4311c6778c99c069b391d3a8cf0abf",
+      "destination": "src/t3/inbox.ts",
+      "adaptedSha256": "25a275266351bcf087f672b5f01e74993a3cd01ca308ed70e3ce77d9fa22b5cc",
+      "changes": [
+        "Extracted working/attention classification and deterministic inbox/working sorting. Browser grace-period/snooze timer service not copied.",
+        "Trimmed extraction-only trailing blank lines; executable logic unchanged."
+      ]
+    },
+    {
+      "upstream": "packages/client-runtime/src/state/threadSort.ts",
+      "gitBlob": "5d258ed95b9ff0ee19d48616db69750757739dc8",
+      "sourceSha256": "b8947ad64522db4f9538fb93e97c417320ab9c0c7bf43277d9009e31c68bab1b",
+      "destination": "src/t3/timestamps.ts",
+      "adaptedSha256": "9eaceedf867a14ed56d2b76cf800aff683b4f99d409dd1c9809f116e3fb0dc5c",
+      "changes": [
+        "Extracted toSortableTimestamp unchanged."
+      ]
+    },
+    {
+      "upstream": "packages/client-runtime/src/state/models.ts",
+      "gitBlob": "8e04837b8b68ca6f761cc1ead9e09b156e62e93a",
+      "sourceSha256": "5ccf395c62018c987bcf369319f4767cd75ab77872984c2ed432044d241e7bec",
+      "destination": "src/t3/activity.ts",
+      "adaptedSha256": "3742c3f1ca8f84e038711d8bcf107cf9fc7278ee753d2dce5632a2646bf58f65",
+      "changes": [
+        "Extracted runtime activity predicates unchanged; local structural type imports."
+      ]
+    },
+    {
+      "upstream": "apps/server/src/checkpointing/Diffs.test.ts",
+      "gitBlob": "88fc507382cfaf6688c5b495b32a0f46aab17926",
+      "sourceSha256": "2409f70026d1f43b24fbb2f90688bc316cc40375bc24c2e7bc8a0319d906730b",
+      "destination": "test/t3/Diffs.test.ts",
+      "adaptedSha256": "afd914ce2c6ac6ea8958e710410de5be7b7833e904b62f95588709d68738d1bb",
+      "changes": [
+        "Original upstream tests copied; test runner/import paths adapted to the local package."
+      ]
+    },
+    {
+      "upstream": "apps/server/src/orchestration-v2/QueuedRunOrder.test.ts",
+      "gitBlob": "838ec141a4b50f2317753419c560bd88b6a8ac85",
+      "sourceSha256": "1c43f08bc33e3b7b16945698be4773aa95179a95559d19fcfa4a5879859dbee6",
+      "destination": "test/t3/QueuedRunOrder.test.ts",
+      "adaptedSha256": "60fb905c3a83e9a378d67eb55a38fd13da0a73d6fe2ca1b454f56b881b2e13bf",
+      "changes": [
+        "Original upstream tests copied; test runner/import paths adapted to the local package."
+      ]
+    },
+    {
+      "upstream": "packages/client-runtime/src/handoff.test.ts",
+      "gitBlob": "508a2f5694d024ea897ea820e313eccecff15bff",
+      "sourceSha256": "6b9bf39f52032d074e06d0621f1c516043e3714828b7ec414fcf3b10bbe2dbfd",
+      "destination": "test/t3/handoff.test.ts",
+      "adaptedSha256": "643469a7b9aa28c2609b28ab26550c92668267a273690bce70cec054b2c17a7b",
+      "changes": [
+        "Original upstream tests copied; test runner/import paths adapted to the local package."
+      ]
+    }
+  ],
+  "licenseSha256": "935d8f2af0c703f9c39517ee57cc4930b19d02d533be930b63f0e82f93614b43"
+}

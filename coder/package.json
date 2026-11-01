@@ -1,0 +1,26 @@
+{
+  "name": "@vims/coder-core",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "license": "MIT",
+  "engines": {
+    "node": ">=22.13.0"
+  },
+  "description": "VIMS-owned native coding core with directly vendored T3 algorithms; no T3 service or CLI dependency.",
+  "exports": {
+    ".": "./dist/index.js"
+  },
+  "scripts": {
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit",
+    "build": "tsc -p tsconfig.build.json && node scripts/copy-notices.mjs",
+    "verify:vendor": "node scripts/verify-vendor.mjs",
+    "demo": "node dist/demo.js"
+  },
+  "devDependencies": {
+    "@types/node": "24.19.2",
+    "typescript": "7.0.2",
+    "vitest": "4.1.12"
+  }
+}
