@@ -1,4 +1,20 @@
 # Native coder adoption changes
+
+## Native Codex app-server protocol
+- Connect native command/file approval and question messages to durable VIMS human
+  requests, including exact content, typed RPC IDs, withdrawn-request cancellation,
+  one-time answers, scoped interruptions and denial of broader permission grants.
+- Expose actual provider-native history retrieval limited to the current task's
+  previous executed runs and frozen checkpoint lineage; no unrelated threads or
+  unapproved draft disclosure.
+- Copy T3's pure token accounting and native answer/presentation helpers with
+  exact upstream snapshots and notices (19 mapped source/test files total).
+- Persist native thread/turn identities and truthful raw usage/capability metadata.
+- Add bounded stdio transport with startup-policy verification and no blind retries.
+- Preserve exec-jsonl for legacy configurations; opt in with app-server-stdio.
+- Expand verified Windows coverage from 66 to 101 cases. Offline initialization of
+  the real Codex 0.160.0 binary and cleanup pass with zero model calls; live model
+  turns and browser acceptance remain unverified.
 ## Extension: native workbench and recoverable task workflows
 - Add four executable T3 copies/extractions and one upstream test file, retaining
   exact original bytes, mapped hashes and MIT notices (17 mapped files total).

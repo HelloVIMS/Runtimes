@@ -257,6 +257,25 @@ function renderRuns() {
       ),
       node("pre", run.prompt, "run-prompt"),
     );
+    const capability = state.capabilities?.find(
+      (value) => value.driverId === run.providerInstanceId,
+    );
+    if (capability)
+      card.append(
+        node(
+          "p",
+          `${capability.transport} ┬╖ ${capability.runtimeApprovals ? "native approval requests" : "no native approval bridge"} ┬╖ ${capability.nativeResume ? "native resume" : "portable context"}`,
+          "fine",
+        ),
+      );
+    if (run.usage?.usageStatus && run.usage.usageStatus !== "unavailable")
+      card.append(
+        node(
+          "p",
+          `${run.usage.usageStatus} usage ┬╖ ${(run.usage.inputTokens ?? 0).toLocaleString()} input / ${(run.usage.outputTokens ?? 0).toLocaleString()} output tokens ┬╖ main agent only`,
+          "fine",
+        ),
+      );
     if (run.error) card.append(node("p", run.error, "fine danger"));
     const actions = node("div", undefined, "run-actions");
     if (run.status === "waiting")

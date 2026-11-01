@@ -1,3 +1,4 @@
+import { CodexAppServerDriver } from "./codexAppServer.ts";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
@@ -14,7 +15,12 @@ export interface WorkbenchConfig {
   port?: number;
   projects: WorkbenchProject[];
   profiles: WorkbenchProfile[];
-  drivers: Array<{ id: string; binary: string; allowWorkspaceWrites: boolean }>;
+  drivers: Array<{
+    id: string;
+    binary: string;
+    allowWorkspaceWrites: boolean;
+    transport: "exec-jsonl" | "app-server-stdio";
+  }>;
 }
 const record = (value: unknown): Record<string, unknown> => {
   if (value === null || typeof value !== "object" || Array.isArray(value))
@@ -49,7 +55,12 @@ export function parseWorkbenchConfig(raw: unknown): WorkbenchConfig {
     return entries.map(record);
   };
   const drivers = list("drivers").map((item) => {
-    exact(item, ["id", "binary", "allowWorkspaceWrites"]);
+    exact(item, ["id", "binary", "allowWorkspaceWrites", "transport"]);
+    if (
+      item.transport !== undefined &&
+      !["exec-jsonl", "app-server-stdio"].includes(String(item.transport))
+    )
+      throw new Error("Unsupported native transport");
     const binary = absolute(item.binary, "native executable");
     if (/\.(bat|cmd|ps1)$/i.test(binary))
       throw new Error("Select a native Codex executable, not a shell launcher");
@@ -62,6 +73,9 @@ export function parseWorkbenchConfig(raw: unknown): WorkbenchConfig {
       id: identifier(item.id),
       binary,
       allowWorkspaceWrites: item.allowWorkspaceWrites === true,
+      transport: (item.transport ?? "exec-jsonl") as
+        | "exec-jsonl"
+        | "app-server-stdio",
     };
   });
   if (new Set(drivers.map((d) => d.id)).size !== drivers.length)
@@ -100,11 +114,14 @@ export async function launchConfiguredWorkbench(config: WorkbenchConfig) {
     if (!stat.isFile())
       throw new Error("Configured native executable is not a file");
   }
-  const drivers = config.drivers.map(
-    (driver) =>
-      new CodexExecDriver(driver.id, driver.binary, {
-        allowWorkspaceWrites: driver.allowWorkspaceWrites,
-      }),
+  const drivers = config.drivers.map((driver) =>
+    driver.transport === "app-server-stdio"
+      ? new CodexAppServerDriver(driver.id, driver.binary, {
+          allowWorkspaceWrites: driver.allowWorkspaceWrites,
+        })
+      : new CodexExecDriver(driver.id, driver.binary, {
+          allowWorkspaceWrites: driver.allowWorkspaceWrites,
+        }),
   );
   const core = new CoderCore(config.stateDirectory, drivers);
   try {

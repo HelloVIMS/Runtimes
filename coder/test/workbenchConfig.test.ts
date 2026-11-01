@@ -17,6 +17,38 @@ const good = () => ({
   ],
 });
 describe("explicit owner configuration", () => {
+  it("keeps existing exec configurations stable and requires explicit app-server opt-in", () => {
+    expect(parseWorkbenchConfig(good()).drivers[0]!.transport).toBe(
+      "exec-jsonl",
+    );
+    const config = {
+      ...good(),
+      drivers: [
+        {
+          id: "codex",
+          binary: process.execPath,
+          transport: "app-server-stdio",
+        },
+      ],
+    };
+    expect(parseWorkbenchConfig(config).drivers[0]).toMatchObject({
+      transport: "app-server-stdio",
+      allowWorkspaceWrites: false,
+    });
+    expect(() =>
+      parseWorkbenchConfig({
+        ...config,
+        drivers: [
+          {
+            id: "codex",
+            binary: process.execPath,
+            transport: "remote-websocket",
+          },
+        ],
+      }),
+    ).toThrow("transport");
+  });
+
   it("defaults to read-only and refuses public bind/executable/permission surprises", () => {
     expect(parseWorkbenchConfig(good()).drivers[0]!.allowWorkspaceWrites).toBe(
       false,

@@ -271,22 +271,20 @@ export async function startWorkbench(options: WorkbenchOptions) {
             .threads()
             .filter((thread) => permitted.has(thread.repository));
           const allowed = new Set(threads.map((thread) => thread.id));
-          const summaries = threads
-            .slice(-200)
-            .map((thread) => ({
-              id: thread.id,
-              title: thread.title,
-              updatedAt: thread.updatedAt,
-              projectId: [...projects.values()].find(
-                (p) => p.repository === thread.repository,
-              )!.id,
-              forkedFrom: thread.forkedFrom
-                ? {
-                    threadId: thread.forkedFrom.threadId,
-                    phase: thread.forkedFrom.phase,
-                  }
-                : null,
-            }));
+          const summaries = threads.slice(-200).map((thread) => ({
+            id: thread.id,
+            title: thread.title,
+            updatedAt: thread.updatedAt,
+            projectId: [...projects.values()].find(
+              (p) => p.repository === thread.repository,
+            )!.id,
+            forkedFrom: thread.forkedFrom
+              ? {
+                  threadId: thread.forkedFrom.threadId,
+                  phase: thread.forkedFrom.phase,
+                }
+              : null,
+          }));
           json(res, 200, {
             label: options.label ?? "VIMS Native Workbench",
             fixtureMode: options.fixtureMode === true,
@@ -295,6 +293,13 @@ export async function startWorkbench(options: WorkbenchOptions) {
               name,
             })),
             profiles: [...profiles.values()],
+            capabilities: core
+              .capabilities()
+              .filter((capability) =>
+                [...profiles.values()].some(
+                  (profile) => profile.driverId === capability.driverId,
+                ),
+              ),
             threads: summaries,
             truncated: threads.length > 200,
             inbox: {

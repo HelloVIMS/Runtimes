@@ -55,12 +55,10 @@ export function historyRows(
   options: Parameters<typeof historyStatement>[2] = {},
 ): HistoryRow[] {
   const q = historyStatement(store, source, options);
-  return q.query
-    .all(...q.params, q.limit)
-    .map((row) => ({
-      position: Number(row.sequence),
-      item: JSON.parse(String(row.payload)) as StoredItem,
-    }));
+  return q.query.all(...q.params, q.limit).map((row) => ({
+    position: Number(row.sequence),
+    item: JSON.parse(String(row.payload)) as StoredItem,
+  }));
 }
 /** Bounded memory; immutable source boundaries survive nested forks and later parent work. */
 export function collectHistory(

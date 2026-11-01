@@ -1,3 +1,4 @@
+import type { HistoryReadInput, ProviderTelemetry } from "./providerTypes.ts";
 import { RequestBroker } from "./requests.ts";
 import type { RuntimeResponseInput } from "./requestTypes.ts";
 import { collectHistory, historyRows } from "./history.ts";
@@ -614,8 +615,17 @@ export class CoderCore {
           prompt: claimed.prompt,
           history: handoff.messages,
           historyContext: handoff.context,
-          request: (spec, timeoutMs) =>
-            this.requests.ask(claimed.id, spec, controller.signal, timeoutMs),
+          request: (spec, timeoutMs, requestSignal) =>
+            this.requests.ask(
+              claimed.id,
+              spec,
+              requestSignal
+                ? AbortSignal.any([controller.signal, requestSignal])
+                : controller.signal,
+              timeoutMs,
+            ),
+          readHistory: (input) => this.readHistoryForRun(claimed.id, input),
+          telemetry: (event) => this.recordProviderTelemetry(claimed.id, event),
         },
         (item: DriverItem) => {
           controller.signal.throwIfAborted();
@@ -711,18 +721,138 @@ export class CoderCore {
       run.after,
     );
   }
+  readHistoryForRun(runId: string, input: HistoryReadInput) {
+    const run = this.store.run(runId);
+    const sources = this.historySources(run.threadId, run.ordinal);
+    const source = sources.find((source) => source.threadId === input.threadId);
+    if (!source) throw new Error("History is not in this task lineage");
+    const limit = input.limit ?? 20,
+      chars = input.maxCharsPerItem ?? 4000;
+    if (
+      !Number.isSafeInteger(limit) ||
+      limit < 1 ||
+      limit > 50 ||
+      !Number.isSafeInteger(chars) ||
+      chars < 1 ||
+      chars > 8000
+    )
+      throw new Error("Invalid scoped history limits");
+    for (const n of [input.throughSequence, input.maxOrdinal])
+      if (n !== undefined && (!Number.isSafeInteger(n) || n < 0))
+        throw new Error("Invalid history bounds");
+    return this.vims_thread_read(
+      {
+        ...input,
+        limit,
+        maxCharsPerItem: chars,
+        throughSequence: Math.min(
+          source.throughSequence,
+          input.throughSequence ?? Number.MAX_SAFE_INTEGER,
+        ),
+        maxOrdinal: Math.min(
+          source.maxOrdinal,
+          input.maxOrdinal ?? Number.MAX_SAFE_INTEGER,
+        ),
+      },
+      true,
+    );
+  }
+  private recordProviderTelemetry(runId: string, event: ProviderTelemetry) {
+    const run = this.store.run(runId);
+    if (
+      !["preparing", "running", "blocked", "cancel_requested"].includes(
+        run.status,
+      )
+    )
+      throw new Error("Telemetry arrived after run settlement");
+    if (event.kind === "session") {
+      text(event.threadId, "native thread id", 256);
+      if (event.turnId !== undefined) text(event.turnId, "native turn id", 256);
+      if (
+        run.nativeSession &&
+        (run.nativeSession.threadId !== event.threadId ||
+          (run.nativeSession.turnId &&
+            event.turnId &&
+            run.nativeSession.turnId !== event.turnId))
+      )
+        throw new Error("Native session identity changed");
+      const nativeSession = {
+        threadId: event.threadId,
+        turnId: event.turnId ?? run.nativeSession?.turnId,
+      };
+      this.store.transaction(() => {
+        this.store.putRun({ ...run, nativeSession });
+        this.store.event(
+          run.threadId,
+          run.id,
+          "provider.session",
+          nativeSession,
+        );
+      });
+    } else if (event.kind === "usage") {
+      const usage = event.usage;
+      if (
+        !["unavailable", "partial", "complete"].includes(usage.usageStatus) ||
+        usage.usageScope !== "main_agent" ||
+        typeof usage.hasSubagents !== "boolean"
+      )
+        throw new Error("Invalid native usage report");
+      for (const key of [
+        "inputTokens",
+        "cachedInputTokens",
+        "cacheCreationTokens",
+        "outputTokens",
+        "reasoningTokens",
+      ] as const) {
+        const n = usage[key];
+        if (n !== undefined && (!Number.isSafeInteger(n) || n < 0))
+          throw new Error("Invalid native token total");
+      }
+      this.store.transaction(() => {
+        this.store.putRun({ ...run, usage });
+        this.store.event(run.threadId, run.id, "provider.usage", usage);
+      });
+    } else {
+      text(event.code, "notice code", 128);
+      text(event.message, "provider notice", 2048);
+      this.store.transaction(() =>
+        this.store.event(run.threadId, run.id, "provider.notice", {
+          code: event.code,
+          message: event.message,
+        }),
+      );
+    }
+  }
+  capabilities() {
+    return [...this.drivers.values()].map((driver) => ({
+      driverId: driver.id,
+      ...(driver.capabilities ?? {
+        transport: "embedded",
+        context: "portable",
+        runtimeApprovals: false,
+        userQuestions: false,
+        historyTool: false,
+        tokenUsage: false,
+        nativeResume: false,
+        providerInterrupt: false,
+      }),
+    }));
+  }
   /** Bounded host API matching the history references in copied handoff coverage. */
-  vims_thread_read(input: {
-    threadId: string;
-    view?: "activity";
-    limit?: number;
-    afterPosition?: number;
-    maxCharsPerItem?: number;
-    itemId?: string;
-    textOffset?: number;
-    throughSequence?: number;
-    maxOrdinal?: number;
-  }) {
+  vims_thread_read(
+    input: {
+      threadId: string;
+      view?: "activity";
+      limit?: number;
+      afterPosition?: number;
+      maxCharsPerItem?: number;
+      itemId?: string;
+      textOffset?: number;
+      throughSequence?: number;
+      maxOrdinal?: number;
+    },
+    startedOnly = false,
+  ) {
     this.store.thread(input.threadId);
     const max = input.maxCharsPerItem ?? 4000;
     if (!Number.isSafeInteger(max) || max < 1 || max > 16000)
@@ -753,6 +883,7 @@ export class CoderCore {
         after: input.itemId ? 0 : after,
         itemId: input.itemId,
         limit: input.itemId ? 1 : limit + 1,
+        startedOnly,
       },
     );
     const selected = matching.slice(0, limit);

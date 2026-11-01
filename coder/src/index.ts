@@ -32,3 +32,7 @@ export type {
   WorkbenchProfile,
   WorkbenchProject,
 } from "./workbench.ts";
+
+export { CodexAppServerDriver } from "./codexAppServer.ts";
+export type { CodexAppServerOptions } from "./codexAppServer.ts";
+export type * from "./providerTypes.ts";

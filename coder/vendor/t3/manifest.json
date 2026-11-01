@@ -176,6 +176,26 @@
       "changes": [
         "Extracted question-progress and displaced-draft helpers; local question/import types. Thread chip/link projection is excluded."
       ]
+    },
+    {
+      "upstream": "apps/server/src/provider/CodexTurnTokenUsage.ts",
+      "gitBlob": "7b0f20a123ffed3bf400aa8fd668b2f500b69d18",
+      "sourceSha256": "9690cf549cbe2c69c21a8c2bcfea14166891c9cd06e62ff7b02a797300b41f19",
+      "destination": "src/t3/codexTokenUsage.ts",
+      "adaptedSha256": "cc9b9e947bc07f37e7dafbbf073755fb89d87242fd0808ffbe8f6e188e6d5519",
+      "changes": [
+        "Full pure token-accounting implementation copied; type-only imports use explicit local structural contracts. No monetary cost or entitlement estimate is invented."
+      ]
+    },
+    {
+      "upstream": "apps/server/src/orchestration-v2/Adapters/CodexAdapterV2.ts",
+      "gitBlob": "821cf051c32353eaf3bc101e449da1a75bd19fba",
+      "sourceSha256": "7d4cce865f5e6316a107585e8ac15b3d9075420db410a1121767d81427e6ff60",
+      "destination": "src/t3/codexApprovalMappings.ts",
+      "adaptedSha256": "98fbc8beab0bc5f59be7c3ce8ab9927e31b8e59e2f83d7f79e705e1df9ff902e",
+      "changes": [
+        "Extracted file-change display helper and user-answer wire conversion, retaining exact string/array values and allowed-question filtering. Type references localized; no session/persistent approval branches copied."
+      ]
     }
   ],
   "licenseSha256": "935d8f2af0c703f9c39517ee57cc4930b19d02d533be930b63f0e82f93614b43"

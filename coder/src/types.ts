@@ -1,3 +1,9 @@
+import type {
+  NativeTokenUsage,
+  ProviderTelemetry,
+  NativeCapabilities,
+  HistoryReadInput,
+} from "./providerTypes.ts";
 import type { RuntimeRequestSpec, RuntimeReply } from "./requestTypes.ts";
 import type {
   ModelSelection,
@@ -37,6 +43,8 @@ export interface Thread {
   updatedAt: string;
 }
 export interface Run {
+  usage?: NativeTokenUsage;
+  nativeSession?: { threadId: string; turnId?: string };
   id: string;
   threadId: string;
   ordinal: number;
@@ -77,7 +85,10 @@ export interface NativeTurn {
   request?: (
     spec: RuntimeRequestSpec,
     timeoutMs?: number,
+    requestSignal?: AbortSignal,
   ) => Promise<RuntimeReply>;
+  readHistory?: (input: HistoryReadInput) => unknown;
+  telemetry?: (event: ProviderTelemetry) => void;
 }
 export type DriverItem =
   | { type: "assistant_message"; text: string }
@@ -90,6 +101,7 @@ export type DriverItem =
   | { type: "file_change"; fileName: string }
   | { type: "proposed_plan"; markdown: string };
 export interface NativeDriver {
+  readonly capabilities?: NativeCapabilities;
   readonly id: string;
   readonly contextWindow?: number;
   /** This MVP uses explicit portable context, never a hidden T3/native session. */

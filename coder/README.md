@@ -8,6 +8,19 @@ VIMS desktop/daemon code is not accessible in this repository, so the released V
 Coder UI is not changed. The included workbench is a separate, opt-in local control
 surface. Existing eight-shell runtime build/release targets are untouched. Nothing
 starts automatically, and no live provider or production deployment was exercised.
+## Current increment: direct native Codex protocol
+The opt-in `app-server-stdio` transport connects VIMS's durable human-request
+broker to actual Codex command/file approval and question-response messages. It
+also exposes lineage-scoped history as a native dynamic tool, requests interruption
+of the exact active turn, records native session identifiers and reports raw token
+usage using directly copied T3 accounting. The older `exec-jsonl` path remains
+available and is still the default for existing configurations that omit transport.
+**101 tests pass on Windows**, and an offline initialization probe against the
+installed **Codex CLI 0.160.0** passed with an isolated temporary Codex home and
+verified cleanup. That probe made no thread/start, turn/start or model call.
+Provider turn behavior is exercised by real child-process protocol fixtures, not
+paid/live model sessions. See [the native protocol guide](docs/codex-app-server.md)
+for capability limits, contract sources, diagnostic instructions and review steps.
 ## Start with the offline demonstration
 Node 22.13+ with `node:sqlite` and Git are required; the extension was tested on
 Windows with Node 24.22.1. No model account is needed for these checks or fixtures:
@@ -48,13 +61,18 @@ for a trusted native provider and project. No task starts until its exact revisi
 is approved and a run is dispatched. Model calls may consume your existing quota.
 No embedded keys or fixed model names are supplied, and CLI credentials are not
 read or copied by this package. Normal provider authentication remains with the CLI.
-The direct Codex adapter is contract-tested, not live-provider-tested. It uses
-`codex exec --json`, prompt stdin and an explicit `read-only` or `workspace-write`
-sandbox. It never sets `danger-full-access` or invokes T3. Other providers implement
-`NativeDriver.run(turn, emit, signal)`; their production adapters are not included.
+Two direct Codex transports are available. `exec-jsonl` uses `codex exec --json`;
+`app-server-stdio` uses the bidirectional native app-server and supports scoped
+approval/question replies and history-tool calls. Select the latter explicitly
+with `"transport": "app-server-stdio"` in the driver configuration. Neither sets
+`danger-full-access`, invokes T3, or copies credentials. Both use explicit baseline
+read-only/workspace-write policy; only the app-server transport verifies native
+policy acknowledgements before starting the turn. Actual model-turn execution is
+not yet live-provider-tested. Other providers implement `NativeDriver`; their
+production adapters are not included.
 ## What is actually copied from T3
 Pinned upstream: `pingdotgg/t3code@575579d68ac4bae09f8426a345d4a3eac1e90c67`.
-There are **13 implementation copies/extractions and four copied test files**.
+There are **15 implementation copies/extractions and four copied test files**.
 | Executable copy | Native use |
 | --- | --- |
 | `handoffBudget.ts` | Context occupancy and attachment allowance, intact-item selection, serialized UTF-8 budgets, attributed history and omitted-item references |
@@ -68,11 +86,13 @@ There are **13 implementation copies/extractions and four copied test files**.
 | `pendingUserInputProgress.ts` | Extracted question progress and displaced-draft preservation |
 | `queuedRunEdit.ts` | Extracted edit-exit policy and question/edit conflict guard |
 | `forkPolicy.ts` | Extracted source-run forkability checks; VIMS approval-waiting is explicitly mapped to non-forkable |
+| `codexApprovalMappings.ts` | Extracted native answer conversion and file-approval presentation helpers; no session/persistent-approval logic copied |
+| `codexTokenUsage.ts` | Full pure turn-token accumulation, reset handling, cache subcounts and partial/unavailable reporting |
 These are actual source copies, not merely similar features. `vendor/t3/manifest.json`
 records original paths, Git blob IDs, source/adapted SHA-256s and per-file changes.
 The exact originals are retained under `vendor/t3/upstream/` for inspection. They
 are an audit archive, not additional executable imports. `verify:vendor` checks all
-17 mapped files and the original MIT notice. Build output includes notices too.
+19 mapped files and the original MIT notice. Build output includes notices too.
 The full T3 Effect orchestration/streaming engine and reactive edit store are not
 ported. Local structural types replace type-only imports; they are not full T3 wire
 schemas. SQLite persistence, request handling, Git operations, native adapters,
@@ -101,11 +121,17 @@ cancelled or late answers are refused. Requests are bounded to 1ΓÇô8 question
 16 options each, 32 KiB per request and at most 32 requests per run. The default
 response deadline is two minutes, configurable by the adapter up to ten minutes.
 The workbench marks blocked questions/approvals as needing human attention.
-**This is not automatic interception of every provider tool call.** An adapter must
-use the callback and honor its answer before acting. The included Codex `exec`
-adapter does not bridge Codex-native interactive approval RPCs. Full tool-level
-provider protocol integration remains outstanding. Never expose human approval or
-recovery methods as unrestricted model tools.
+**This is not automatic interception of every tool call.** The new app-server
+adapter forwards supported native command/file approval callbacks and ordinary
+questions into this broker, and sends the scoped response back to the provider.
+Its read-only configuration refuses escalation callbacks. It denies explicit
+permission-profile expansion, session/persistent grants, file grant roots,
+secret elicitation and unsupported MCP approval/login flows. An allow-once answer
+authorizes the reviewed native action; this library is not an independent sandbox
+or a proof that a shell command is harmless. Tools allowed by the provider's
+baseline sandbox do not necessarily prompt. The older exec adapter still lacks
+native interactive approval bridging. Do not expose human approval/recovery APIs
+as unrestricted model tools.
 ### Branch from a checkpoint instead of overwriting work
 `forkThread` verifies a recorded before/after checkpoint against its owned Git ref,
 creates a new thread with that exact base, and uses a new detached worktree when it
@@ -155,8 +181,9 @@ Cancellation targets the captured child process; detached descendants or externa
 side effects cannot be guaranteed reversed/stopped. Worktrees are change isolation,
 not security sandboxes. Git filters and native tools are executable trust boundaries.
 ## Validation and remaining work
-The extended package passes **66 unit/integration cases on Windows Node 24.22.1**,
-including 28 cases from four copied T3 test files. These exercise real disposable
+The package passes **101 unit/integration cases on Windows Node 24.22.1**,
+including 28 cases from four copied T3 test files. The native protocol increment adds
+35 cases, including bidirectional real child-process fixtures. These exercise real disposable
 Git repositories, SQLite reopening/migration, HTTP control APIs, cross-controller
 input/approval/cancellation, stale revisions, dispatch replay, fixed history branches,
 output limits and subprocess behavior. Typecheck, source-provenance checks, build
@@ -167,11 +194,16 @@ is supplied for maintainer acceptance testing; no passing browser result or scre
 is claimed. The new extension has not been rerun on Linux; the earlier core had
 separate Linux validation. Neither local test results nor a build prove upstream CI
 passed. No paid/live provider call was made.
+The native app-server handshake was separately exercised against Codex CLI 0.160.0
+using a fresh temporary CODEX_HOME, with sensitive environment names omitted and
+analytics/feedback disabled in that temporary configuration. Initialization,
+process closure and temporary-home removal passed. It did not create a thread or
+ask a model to work. No normal user authentication files were read by VIMS.
 A maintainer browser check, after building, is `npm run test:browser` with a supported
 Playwright Chromium installation (or an explicitly configured `CHROME_BIN`). It uses
 a disposable fixture, exercises lost-acknowledgement retry and produces desktop/mobile
 screenshots. It requires the browser sandbox; it does not enable an unsafe fallback.
-Private VIMS desktop wiring, permission-center integration, production provider
-acceptance, full native-session fidelity, provider-native approval RPCs, remote/mobile
-transport and destructive rollback remain outstanding. This draft is not full T3
+Private VIMS desktop wiring, permission-center integration, production model-turn
+acceptance, full native-session fidelity, additional provider approval protocols,
+remote/mobile transport and destructive rollback remain outstanding. This draft is not full T3
 parity and not a released/deployed VIMS desktop update.

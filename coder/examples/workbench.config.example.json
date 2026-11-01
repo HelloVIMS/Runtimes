@@ -12,7 +12,8 @@
     {
       "id": "codex-local",
       "binary": "/absolute/path/to/native/codex",
-      "allowWorkspaceWrites": false
+      "allowWorkspaceWrites": false,
+      "transport": "app-server-stdio"
     }
   ],
   "profiles": [

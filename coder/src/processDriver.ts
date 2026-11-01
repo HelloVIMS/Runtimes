@@ -1,3 +1,4 @@
+import type { NativeCapabilities } from "./providerTypes.ts";
 import { spawn } from "node:child_process";
 import { StringDecoder } from "node:string_decoder";
 import path from "node:path";
@@ -130,6 +131,16 @@ export async function runJsonLines(options: {
 }
 /** Direct Codex CLI adapter, not T3. Task approval is enforced by CoderCore. */
 export class CodexExecDriver implements NativeDriver {
+  readonly capabilities: NativeCapabilities = {
+    transport: "exec-jsonl",
+    context: "portable",
+    runtimeApprovals: false,
+    userQuestions: false,
+    historyTool: false,
+    tokenUsage: false,
+    nativeResume: false,
+    providerInterrupt: false,
+  };
   readonly contextMode = "portable" as const;
   constructor(
     readonly id: string,
