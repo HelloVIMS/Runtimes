@@ -16,11 +16,16 @@
     "typecheck": "tsc --noEmit",
     "build": "tsc -p tsconfig.build.json && node scripts/copy-notices.mjs",
     "verify:vendor": "node scripts/verify-vendor.mjs",
-    "demo": "node dist/demo.js"
+    "demo": "node dist/demo.js",
+    "workbench:demo": "node dist/workbenchDemo.js",
+    "test:browser": "node scripts/browser-smoke.mjs",
+    "workbench": "node dist/workbenchCli.js",
+    "verify:dist": "node scripts/check-distribution.mjs"
   },
   "devDependencies": {
     "@types/node": "24.19.2",
     "typescript": "7.0.2",
-    "vitest": "4.1.12"
+    "vitest": "4.1.12",
+    "playwright": "1.56.1"
   }
 }

@@ -1,37 +1,16 @@
-# VIMS native coding core ΓÇö direct T3 source adoption
-This is **not a T3 connector**. It copies and adapts T3 Code source into a VIMS-owned
-Node/TypeScript package, then composes it with VIMS-local SQLite persistence, owned
-Git worktrees/checkpoints and a direct native-provider interface. No T3 executable,
-server, account, service, runtime package or private credential store is required.
-**Integration status:** runnable, tested source-adoption candidate. The private
-VIMS desktop/daemon source is not in this repository, so this package has **not**
-been wired into the released VIMS Coder UI. Its placement under Runtimes is a
-reviewable contribution candidate, not a claim that the maintainers approved a
-new architecture or that VIMS already has all of T3's features. The existing eight
-runtime build/release targets are unchanged. Nothing starts automatically.
-## What is actually copied
-`vendor/t3/manifest.json` pins the exact T3 revision, original paths, Git blob IDs,
-upstream SHA-256s, adapted hashes and each change. Exact original source is retained
-under `vendor/t3/upstream/`; do not confuse that audit archive with executable code.
-| Executable copy | Native use |
-| --- | --- |
-| `handoffBudget.ts` | Context occupancy/attachment allowance, intact-item selection, serialized UTF-8 budget, attributed history and omitted-item references |
-| `handoff.ts` | Provider/model handoff preview and source/destination identity |
-| `QueuedRunOrder.ts` | Completion-priority, user queue position and stable ordinal ordering |
-| `Diffs.ts` | NUL-delimited Git numstat parsing, including renames, Unicode and binary files |
-| `liveEvents.ts` | Extracted whole-update coalescing with cursor/barrier preservation |
-| `inbox.ts`, `activity.ts`, `timestamps.ts` | Extracted working/attention classification and deterministic task sorting |
-| `worktreeSetup.ts` | Workspace-setup visibility and failure presentation |
-Three upstream test files are also copied and run against the local adaptations.
-The T3 Effect dependency injection/configuration layer is not pulled in; type-only
-imports use a small, explicit local structural contract. These are **not** T3's
-complete wire schemas. VIMS storage, process handling and composition are new glue,
-not falsely attributed copies of T3's complete orchestration engine.
-T3's MIT copyright and permission notice are preserved in `vendor/t3/LICENSE` and
-`THIRD_PARTY_NOTICES.md`. `npm run build` puts notices/provenance in `dist/` too.
-No T3 artwork, product branding or endorsement is used.
-## Run and verify without T3 or a model account
-Node 22.13+ with `node:sqlite` and Git are required (Node 24 recommended).
+# VIMS native coding core and workbench
+This package **copies and adapts T3 Code implementation into VIMS-owned code**.
+It is not a T3 connector: no T3 app, executable, daemon, account, service or runtime
+package is required. SQLite state, Git worktrees, native-provider execution and the
+optional browser workbench belong to this package. Runtime npm dependencies: zero.
+**Integration status:** source-adoption candidate, submitted as a draft. The private
+VIMS desktop/daemon code is not accessible in this repository, so the released VIMS
+Coder UI is not changed. The included workbench is a separate, opt-in local control
+surface. Existing eight-shell runtime build/release targets are untouched. Nothing
+starts automatically, and no live provider or production deployment was exercised.
+## Start with the offline demonstration
+Node 22.13+ with `node:sqlite` and Git are required; the extension was tested on
+Windows with Node 24.22.1. No model account is needed for these checks or fixtures:
 ```sh
 cd coder
 npm ci --ignore-scripts
@@ -39,93 +18,160 @@ npm run verify:vendor
 npm run typecheck
 npm test
 npm run build
+npm run verify:dist
 npm run demo
 ```
-The demo creates a disposable Git repository, runs two **fixture** providers,
-passes research context between them, changes only the isolated worktree, prints
-the real checkpoint diff, then removes its own temporary files. It uses no model,
-network call, T3 installation or real user project. Fixture success is not a live
-provider-integration claim. Tests and normal builds do not start agent services.
-## Use from the VIMS host
-```ts
-import { CoderCore, CodexExecDriver } from '@vims/coder-core';
-// Native executable chosen by the owner. No T3 CLI or T3 server sits in this path.
-const provider = new CodexExecDriver('codex-local', '/absolute/path/to/codex', {
-  allowWorkspaceWrites: false, // read-only by default; opt in deliberately
-});
-const core = new CoderCore('/private/vims-coder-state', [provider]);
-const thread = await core.createThread('create-unique-id', {
-  repository: '/absolute/trusted/project', title: 'Review this project',
-});
-const run = core.queue('queue-unique-id', {
-  threadId: thread.id, driverId: provider.id, model: 'owner-selected-model',
-  prompt: 'Review the implementation and propose improvements. Do not deploy.',
-});
-// Only after the host authenticates the human and shows the exact task/model:
-core.approve('approval-unique-id', run.id);
-await core.executeNext(thread.id);
-const review = await core.review(run.id);
-core.close();
+`demo` runs two native fixture providers against disposable Git/SQLite data, passes
+portable history between them, and reports a real checkpoint diff. It does not
+launch a browser or call a model. All temporary fixture data is removed afterward.
+To explicitly launch the offline workbench fixture:
+```sh
+npm run workbench:demo
 ```
-There are no forced model names or embedded credentials. The Codex adapter uses
-`codex exec --json`, stdin prompts and explicit `read-only`/`workspace-write`
-sandbox selection. It never sets `danger-full-access`, invokes a shell, or reads
-Codex's token files. It relies on the CLI's normal authentication. The owner is
-responsible for model usage/costs and provider configuration. Live Codex execution
-has not been run in the contribution tests.
-Other VIMS runtimes implement `NativeDriver.run(turn, emit, signal)` directly.
-They receive a VIMS worktree, prompt and bounded portable historyΓÇönot a T3 thread
-ID. The included Codex adapter is original glue, not copied from T3's app-server
-adapter. Claude, Hermes, Grok, ACP and native session-resume adapters are **not**
-claimed as completed here.
-## Host integration contract
-The desktop UI, Flow jobs and MCP handlers should call the same `CoderCore` methods.
-The package intentionally does not open an HTTP listener, consume pairing tokens,
-modify desktop settings or bypass VIMS's own authentication/approval machinery.
-- `createThread`, `queue`, `approve`, `reorder`, `cancel`: command-ID checked writes.
-- `executeNext`: atomic admission, own worktree, before/after checkpoints, native
-  provider execution and persisted outcome; one admitted run per thread.
-- `review`: immutable checkpoint diff; it does not merge, reset or deploy.
-- `inbox`, `workspaceProgress`, `handoffPreview`: native presentation data.
-- `vims_thread_read`: bounded item/cursor/text-offset retrieval for omitted history.
-- `liveBatch`: copied T3 coalescing; durable events remain intact in SQLite.
-- `reconcileInterrupted`: an explicit recovery action after the host confirms an
-  old executor stopped. The library never silently redelivers an ambiguous run.
-A host that advertises `vims_thread_read` to a provider must actually expose that
-API through its tool system. The standalone Codex adapter does **not** install an
-MCP server and explicitly tells Codex to ask the host for omitted history instead.
-Approval is task-level in this prototype; per-tool provider approval routing is
-not implemented. Never expose `approve` or recovery controls as unrestricted
-agent tools. The host must enforce user identity, project access and permission
-ceilings before calling any write method. Command IDs prevent accidental replay;
-they are not authorization credentials.
-## Persistence, cancellation and Git boundaries
-Command receipts and state/event changes commit in one SQLite transaction with
-WAL and FULL synchronization. Pending approvals cannot execute. Duplicate command
-IDs with the same input return the original receipt; different input is rejected.
-The receipt is an acknowledgement, not a live status snapshot; read the run record
-for its current state. State survives reopening. Running/claimed jobs remain
-unresolved after process failure and are **not automatically retried**.
-This is not exactly-once distributed execution. A process can fail after a native
-agent changed files. Inspect the worktree and old process before reconciling and
-submitting a new command. Cancellation targets only the exact spawned child; it
-cannot guarantee termination of detached descendants or reverse external effects.
-A cancelled run therefore still needs review. Raw provider stderr is not exposed.
-Each thread owns a separate, detached Git worktree. Checkpoints use temporary Git
-indexes, so the owner's primary index is not staged or reset. The snapshot honors
-Git ignores; tracked sensitive files are still part of the trusted repository.
-No auto-merge or destructive rollback is supplied. Low-level cleanup requires
-explicit confirmation and refuses dirty worktrees. Worktrees are change isolation,
-**not security sandboxes**. Git filters, repository instructions and model tools
-are executable trust boundaries; use trusted repositories and provider sandboxes.
-Keep the state directory outside all projects, private to the host OS account,
-and on a reliable local filesystem. The package is a trusted local library, not a
-multi-tenant server. Do not pass arbitrary untrusted driver objects or executable
-configuration to it. Any remote surface needs VIMS authentication and scoped tools.
-## Outstanding integration work
-Private VIMS host wiring, the existing desktop review UI, real provider acceptance
-tests, permission-center integration, tool-level approvals, native session fidelity,
-remote/mobile supervision and safe file rollback remain host integration work.
-This package does not claim to replace T3's entire application. It provides copied
-T3 functionality that VIMS can own and extend without making T3 a prerequisite.
-Codex CLI contract reference: https://developers.openai.com/codex/noninteractive/
+The launcher prints a private loopback URL with a session token. Open it on the
+same computer. The fixture asks a format question, requests one file-write approval,
+and writes only its own isolated worktree. The interface labels this as a fixture,
+not an AI/model response. Ctrl+C closes its server and removes its disposable data.
+Do not share the URL/token. Browser interaction and visual rendering have not yet
+been acceptance-tested; the API/core tests below are not a substitute for that.
+## Configure direct native-provider execution
+Copy `examples/workbench.config.example.json` to a private local config file and
+replace every placeholder with owner-selected absolute paths and a model supported
+by your installed CLI. Use a **native Codex executable**, not a `.cmd`, `.bat` or
+PowerShell shim. Windows JSON paths may use forward slashes, such as `C:/Projects/x`.
+```sh
+npm run workbench -- --config /absolute/path/to/private-config.json
+```
+The configuration fixes the allowed projects, provider executables and model
+profiles. `allowWorkspaceWrites` defaults to false. Enable it deliberately only
+for a trusted native provider and project. No task starts until its exact revision
+is approved and a run is dispatched. Model calls may consume your existing quota.
+No embedded keys or fixed model names are supplied, and CLI credentials are not
+read or copied by this package. Normal provider authentication remains with the CLI.
+The direct Codex adapter is contract-tested, not live-provider-tested. It uses
+`codex exec --json`, prompt stdin and an explicit `read-only` or `workspace-write`
+sandbox. It never sets `danger-full-access` or invokes T3. Other providers implement
+`NativeDriver.run(turn, emit, signal)`; their production adapters are not included.
+## What is actually copied from T3
+Pinned upstream: `pingdotgg/t3code@575579d68ac4bae09f8426a345d4a3eac1e90c67`.
+There are **13 implementation copies/extractions and four copied test files**.
+| Executable copy | Native use |
+| --- | --- |
+| `handoffBudget.ts` | Context occupancy and attachment allowance, intact-item selection, serialized UTF-8 budgets, attributed history and omitted-item references |
+| `handoff.ts` | Provider/model source and destination identity and handoff preview |
+| `QueuedRunOrder.ts` | Completion priority, queue position and stable ordinal ordering |
+| `Diffs.ts` | NUL-delimited Git numstat, including renames, Unicode and binary files |
+| `worktreeSetup.ts` | Setup-state visibility and failure presentation |
+| `liveEvents.ts` | Extracted whole-update coalescing with cursor/barrier preservation |
+| `inbox.ts`, `activity.ts`, `timestamps.ts` | Extracted working/attention classification and deterministic sorting |
+| `pendingUserInput.ts` | Exact option values, single/multi-choice answers, custom text and intentionally cleared editor answers |
+| `pendingUserInputProgress.ts` | Extracted question progress and displaced-draft preservation |
+| `queuedRunEdit.ts` | Extracted edit-exit policy and question/edit conflict guard |
+| `forkPolicy.ts` | Extracted source-run forkability checks; VIMS approval-waiting is explicitly mapped to non-forkable |
+These are actual source copies, not merely similar features. `vendor/t3/manifest.json`
+records original paths, Git blob IDs, source/adapted SHA-256s and per-file changes.
+The exact originals are retained under `vendor/t3/upstream/` for inspection. They
+are an audit archive, not additional executable imports. `verify:vendor` checks all
+17 mapped files and the original MIT notice. Build output includes notices too.
+The full T3 Effect orchestration/streaming engine and reactive edit store are not
+ported. Local structural types replace type-only imports; they are not full T3 wire
+schemas. SQLite persistence, request handling, Git operations, native adapters,
+HTTP server and browser layout are new composition code unless marked otherwise.
+No T3 artwork, product branding or endorsement is used. Preserve the MIT notice and
+`THIRD_PARTY_NOTICES.md` in redistributed/bundled derivatives.
+## Native workflows
+### Queue, edit, approve and execute
+Every mutation has a caller-selected command ID and a stored receipt. Identical
+retries return the original acknowledgement; conflicting input is rejected.
+`dispatchNext` commits admission and the command receipt together. Retrying an old
+dispatch cannot accidentally start the next queued task.
+`editQueued` requires the revision the human reviewed. It is allowed only before
+execution, increments the revision and **revokes previous approval**. `approve`
+accepts an expected revision; the workbench always requires it. Edits are blocked
+while a runtime question owns the composer. The current transcript projects the
+latest item revision, while the append-only audit trail preserves earlier values.
+### Runtime questions and request-specific approvals
+A participating native adapter can `await turn.request(spec)`. The durable broker
+stores the exact question/action content, its digest, deadline, answer and outcome,
+then marks the run blocked. A second authorized local controller can answer it.
+Question normalization and progress use the copied T3 implementation.
+Approval answers are only `allow_once` or `deny`. No blanket full-access response
+exists. Answers are tied to the displayed request digest; mismatched, expired,
+cancelled or late answers are refused. Requests are bounded to 1ΓÇô8 questions,
+16 options each, 32 KiB per request and at most 32 requests per run. The default
+response deadline is two minutes, configurable by the adapter up to ten minutes.
+The workbench marks blocked questions/approvals as needing human attention.
+**This is not automatic interception of every provider tool call.** An adapter must
+use the callback and honor its answer before acting. The included Codex `exec`
+adapter does not bridge Codex-native interactive approval RPCs. Full tool-level
+provider protocol integration remains outstanding. Never expose human approval or
+recovery methods as unrestricted model tools.
+### Branch from a checkpoint instead of overwriting work
+`forkThread` verifies a recorded before/after checkpoint against its owned Git ref,
+creates a new thread with that exact base, and uses a new detached worktree when it
+runs. The original worktree and primary checkout are not reset, cleaned or merged.
+Before-forks exclude the source run's context; after-forks include it. Failed but
+checkpointed runs can be inspected and branched too.
+Inherited history is frozen by source event sequence and run ordinal. A later
+parent message, edit or run cannot silently alter a child's inherited context.
+Nested forks retain the same source attribution, with a bounded lineage of 16
+ancestors. `vims_thread_read` accepts snapshot bounds for omitted-history recovery.
+This is non-destructive checkpoint branching, not full provider-native conversation
+forking or destructive rollback. Those remain different integration tasks.
+## Workbench controls and security boundary
+The optional `startWorkbench` server binds only `127.0.0.1`. It is not a remotely
+reachable or multi-tenant service. The launcher-generated token grants owner-level
+control over configured projects/profiles; it is not a per-user identity system.
+It must not be given to agents, sent in logs to third parties or exposed publicly.
+The API requires a bearer token, checks Host and Origin, rejects cross-site access,
+uses no cookies/CORS, and limits command size. Static files come from an explicit
+allowlist. The UI removes a token-bearing URL fragment and keeps the token only in
+memoryΓÇönot browser storage. Model output is inserted as text, not executable HTML.
+The response policy disallows external scripts and framing. These controls do not
+protect against a compromised local OS account, trusted extension or malicious
+owner-configured executable.
+The UI supplies thread/queue controls, exact-task approval, questions and one-time
+approval forms, activity, checkpoint diff preview, patch download and branching.
+Polling resumes by event cursor. A lost acknowledgement preserves the same immutable
+command envelope for retry; it must not be replaced with a new ID to bypass ambiguity.
+Shutdown requests cancellation only for the exact runs this workbench admitted,
+not other controllers' tasks. Locking the browser session is not cancellation.
+The local API shares `CoderCore` with the rest of the package. Existing VIMS desktop,
+Flow or MCP integration should reuse these methods while enforcing its own identity,
+project policy and permission ceilings. It is not necessary to adopt this HTTP
+surface to reuse the native core or copied algorithms.
+## Persistence and failure behavior
+SQLite uses WAL and FULL synchronization. Schema v2 adds request records/indexes
+without dropping v1 threads, command receipts or history. A migration test verifies
+reopening original-format data. Keep the state directory private, outside every
+project and on a reliable local filesystem. Checkpoints use temporary Git indexes
+without staging or resetting the primary worktree's index. Git ignores are honored;
+tracked secrets remain the trusted repository owner's responsibility.
+A receipt acknowledges a command, not task completion. Read the current run state
+for the outcome. Running/claimed/blocked jobs are **not automatically replayed after
+process failure**. Independently confirm the old executor stopped, inspect its work,
+and use the host-only reconciliation operation before submitting new work.
+Cancellation targets the captured child process; detached descendants or external
+side effects cannot be guaranteed reversed/stopped. Worktrees are change isolation,
+not security sandboxes. Git filters and native tools are executable trust boundaries.
+## Validation and remaining work
+The extended package passes **66 unit/integration cases on Windows Node 24.22.1**,
+including 28 cases from four copied T3 test files. These exercise real disposable
+Git repositories, SQLite reopening/migration, HTTP control APIs, cross-controller
+input/approval/cancellation, stale revisions, dispatch replay, fixed history branches,
+output limits and subprocess behavior. Typecheck, source-provenance checks, build
+and built-file/browser-import/license checks also pass.
+Browser/mobile rendering and the Playwright interaction suite are **not verified**:
+the attempted browser execution was blocked before running. A browser smoke harness
+is supplied for maintainer acceptance testing; no passing browser result or screenshot
+is claimed. The new extension has not been rerun on Linux; the earlier core had
+separate Linux validation. Neither local test results nor a build prove upstream CI
+passed. No paid/live provider call was made.
+A maintainer browser check, after building, is `npm run test:browser` with a supported
+Playwright Chromium installation (or an explicitly configured `CHROME_BIN`). It uses
+a disposable fixture, exercises lost-acknowledgement retry and produces desktop/mobile
+screenshots. It requires the browser sandbox; it does not enable an unsafe fallback.
+Private VIMS desktop wiring, permission-center integration, production provider
+acceptance, full native-session fidelity, provider-native approval RPCs, remote/mobile
+transport and destructive rollback remain outstanding. This draft is not full T3
+parity and not a released/deployed VIMS desktop update.

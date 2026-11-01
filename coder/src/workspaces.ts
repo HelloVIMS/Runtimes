@@ -167,6 +167,33 @@ export class Workspaces {
       await fs.rm(temp, { recursive: true, force: true });
     }
   }
+  /** Verify a recorded checkpoint ref, never resolve a caller-selected arbitrary commit. */
+  async checkpoint(
+    thread: Thread,
+    runId: string,
+    phase: "before" | "after",
+    expected: string,
+  ): Promise<string> {
+    if (
+      !UUID.test(thread.id) ||
+      !UUID.test(runId) ||
+      !["before", "after"].includes(phase) ||
+      !SHA.test(expected)
+    )
+      throw new Error("invalid checkpoint identity");
+    const ref = `refs/vims/checkpoints/${thread.id}/${runId}/${phase}`;
+    const actual = (
+      await this.git(thread.repository, [
+        "rev-parse",
+        "--verify",
+        "--end-of-options",
+        ref + "^{commit}",
+      ])
+    ).trim();
+    if (actual !== expected)
+      throw new Error("checkpoint ref no longer matches the recorded snapshot");
+    return actual;
+  }
   async review(thread: Thread, before: string, after: string) {
     const cwd = await this.assertOwned(thread);
     if (!SHA.test(before) || !SHA.test(after))

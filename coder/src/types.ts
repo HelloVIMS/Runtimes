@@ -1,3 +1,4 @@
+import type { RuntimeRequestSpec, RuntimeReply } from "./requestTypes.ts";
 import type {
   ModelSelection,
   OrchestrationV2HistoricalMessage,
@@ -8,16 +9,29 @@ export type RunState =
   | "queued"
   | "preparing"
   | "running"
+  | "blocked"
   | "cancel_requested"
   | "completed"
   | "failed"
   | "cancelled"
   | "interrupted";
+export interface HistorySource {
+  threadId: string;
+  throughSequence: number;
+  maxOrdinal: number;
+}
 export interface Thread {
   id: string;
   title: string;
   repository: string;
   baseRef: string;
+  forkedFrom?: {
+    threadId: string;
+    runId: string;
+    phase: "before" | "after";
+    checkpoint: string;
+    sources: HistorySource[];
+  };
   worktree: string | null;
   createdAt: string;
   updatedAt: string;
@@ -34,6 +48,7 @@ export interface Run {
   status: RunState;
   automaticCompletion: boolean;
   approved: boolean;
+  revision?: number;
   createdAt: string;
   startedAt: string | null;
   completedAt: string | null;
@@ -58,6 +73,11 @@ export interface NativeTurn {
   prompt: string;
   history: readonly OrchestrationV2HistoricalMessage[];
   historyContext: string;
+  /** Only adapters using this callback participate in VIMS runtime input/approval gating. */
+  request?: (
+    spec: RuntimeRequestSpec,
+    timeoutMs?: number,
+  ) => Promise<RuntimeReply>;
 }
 export type DriverItem =
   | { type: "assistant_message"; text: string }

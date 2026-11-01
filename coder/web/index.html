@@ -1,0 +1,197 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>VIMS Native Workbench</title>
+    <link rel="stylesheet" href="/style.css" />
+    <script type="module" src="/app.js"></script>
+  </head>
+  <body>
+    <header class="topbar">
+      <div class="brand">
+        <span class="brand-mark" aria-hidden="true">V</span>
+        <div>
+          <strong>VIMS</strong><span class="eyebrow">NATIVE CODER</span>
+        </div>
+      </div>
+      <div class="top-right">
+        <span id="connection" role="status">Local session ┬╖ locked</span
+        ><button id="sign-out" class="quiet" hidden>Lock session</button>
+      </div>
+    </header>
+    <section id="login" class="login-card">
+      <p class="eyebrow">OWNER-CONTROLLED ┬╖ LOOPBACK ONLY</p>
+      <h1>Your agents.<br />Your workspace.</h1>
+      <p>
+        Inspect tasks, approve exact actions, and review isolated changes. This
+        workbench runs the VIMS-owned core; no T3 app or service is required.
+      </p>
+      <form id="login-form">
+        <label for="token">Local session token</label
+        ><input
+          id="token"
+          type="password"
+          autocomplete="off"
+          spellcheck="false"
+          required
+          placeholder="Paste the token from the local launcher"
+        /><button type="submit">Unlock workbench</button>
+      </form>
+      <p class="fine">
+        The token is kept in memory, not cookies or browser storage. Reloading
+        requires a new unlock. Do not share it.
+      </p>
+    </section>
+    <div
+      id="notice"
+      class="notice"
+      role="status"
+      aria-live="polite"
+      hidden
+    ></div>
+    <div id="uncertain" class="uncertain" hidden>
+      <strong>Submission outcome is uncertain.</strong
+      ><span
+        >Retrying preserves the same command ID. Do not submit a
+        replacement.</span
+      ><button id="retry">Retry same command</button>
+    </div>
+    <div id="app" hidden>
+      <div id="fixture-banner" class="fixture-banner" hidden>
+        OFFLINE FIXTURE MODE ΓÇö real Git and task state; no model calls, no
+        paid provider.
+      </div>
+      <div class="workspace">
+        <aside class="sidebar">
+          <div class="section-head">
+            <h2>Threads</h2>
+            <button id="new-thread" class="small">New thread</button>
+          </div>
+          <p class="fine">
+            Working and attention-needed tasks share one queue.
+          </p>
+          <nav id="threads" aria-label="Task threads"></nav>
+          <p class="sidebar-foot">
+            Local persistence ┬╖ isolated worktrees<br />Approvals never grant
+            blanket access.
+          </p>
+        </aside>
+        <main>
+          <section id="empty" class="empty-state">
+            <p class="eyebrow">A SINGLE PLACE TO SUPERVISE THE WORK</p>
+            <h1>Start with a task,<br />not another terminal.</h1>
+            <p>
+              Create a thread in an allowed project. Tasks remain paused until
+              you approve the exact prompt and provider.
+            </p>
+            <button id="empty-new">Create a thread</button>
+          </section>
+          <div id="thread-workspace" hidden>
+            <div class="thread-heading">
+              <div>
+                <p id="project-name" class="eyebrow"></p>
+                <h1 id="thread-title"></h1>
+                <p id="lineage" class="fine"></p>
+              </div>
+              <button id="execute">Run next approved</button>
+            </div>
+            <section id="requests" aria-label="Agent requests"></section>
+            <section class="panel composer">
+              <div class="section-head">
+                <h2 id="composer-title">Queue a task</h2>
+                <span id="edit-warning" class="tag warning" hidden
+                  >Fresh approval required</span
+                >
+              </div>
+              <label for="profile">Provider profile</label
+              ><select id="profile"></select
+              ><label for="prompt">Instructions</label
+              ><textarea
+                id="prompt"
+                rows="4"
+                maxlength="32768"
+                placeholder="Describe the change, constraints, and how it should be verified."
+              ></textarea>
+              <div class="composer-actions">
+                <span id="prompt-count" class="fine">0 characters</span>
+                <div>
+                  <button id="cancel-edit" class="quiet" hidden>
+                    Cancel edit</button
+                  ><button id="queue">Queue for approval</button>
+                </div>
+              </div>
+              <details id="recovered" hidden>
+                <summary>Recovered unsaved edit</summary>
+                <pre id="recovered-text"></pre>
+              </details>
+            </section>
+            <div class="work-columns">
+              <section class="panel">
+                <div class="section-head">
+                  <h2>Task queue & runs</h2>
+                  <span id="run-count" class="fine"></span>
+                </div>
+                <div id="runs"></div>
+              </section>
+              <section class="panel activity-panel">
+                <div class="section-head">
+                  <h2>Activity</h2>
+                  <span class="tag">Persistent</span>
+                </div>
+                <p class="fine">
+                  The latest 200 events are shown. Item updates replace earlier
+                  display versions; the audit log remains intact.
+                </p>
+                <div id="activity" role="log" aria-live="off"></div>
+              </section>
+            </div>
+            <section id="review" class="panel review-panel" hidden>
+              <div class="section-head">
+                <div>
+                  <p class="eyebrow">CHECKPOINT REVIEW</p>
+                  <h2 id="review-title">Changes</h2>
+                </div>
+                <button id="download-patch" class="quiet">
+                  Download full patch
+                </button>
+              </div>
+              <p class="fine">
+                Review only: nothing is merged or reset. Branching creates a new
+                worktree from the recorded snapshot.
+              </p>
+              <div id="review-files" class="file-list"></div>
+              <pre id="patch" class="patch" tabindex="0"></pre>
+            </section>
+          </div>
+        </main>
+      </div>
+    </div>
+    <dialog id="thread-dialog">
+      <form id="thread-form">
+        <div class="section-head">
+          <h2>New thread</h2>
+          <button type="button" id="close-thread" class="quiet">Close</button>
+        </div>
+        <label for="new-project">Project</label
+        ><select id="new-project"></select
+        ><label for="new-title">Thread title</label
+        ><input
+          id="new-title"
+          maxlength="256"
+          required
+          placeholder="A focused piece of work"
+        />
+        <p class="fine">
+          Only owner-configured projects and provider profiles are available.
+          Creating a thread does not start an agent.
+        </p>
+        <button type="submit">Create thread</button>
+      </form>
+    </dialog>
+    <footer>
+      Native VIMS source-adoption workbench ┬╖ T3-derived algorithms retain
+      their MIT notices ┬╖ Not the released VIMS desktop
+    </footer>
+  </body>
+</html>

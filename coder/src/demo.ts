@@ -83,12 +83,10 @@ try {
         ),
         changedFiles: review.files,
         patch: review.patch,
-        inbox: core
-          .inbox()
-          .attention.map((item) => ({
-            title: item.title,
-            status: item.latestRun?.status,
-          })),
+        inbox: core.inbox().attention.map((item) => ({
+          title: item.title,
+          status: item.latestRun?.status,
+        })),
       },
       null,
       2,

@@ -46,7 +46,7 @@ export class Store {
     const version = Number(
       this.db.prepare("PRAGMA user_version").get()!.user_version,
     );
-    if (version !== 0 && version !== 1) {
+    if (version !== 0 && version !== 1 && version !== 2) {
       this.db.close();
       throw new Error("unsupported coder database version");
     }
@@ -59,7 +59,11 @@ export class Store {
       CREATE TABLE IF NOT EXISTS events(sequence INTEGER PRIMARY KEY AUTOINCREMENT, thread_id TEXT NOT NULL REFERENCES threads(id),
         run_id TEXT, kind TEXT NOT NULL, payload TEXT NOT NULL, at TEXT NOT NULL);
       CREATE INDEX IF NOT EXISTS events_by_thread ON events(thread_id,sequence);
-      PRAGMA user_version=1;
+      CREATE TABLE IF NOT EXISTS runtime_requests(id TEXT PRIMARY KEY,thread_id TEXT NOT NULL REFERENCES threads(id),run_id TEXT NOT NULL REFERENCES runs(id),status TEXT NOT NULL,body TEXT NOT NULL);
+      CREATE UNIQUE INDEX IF NOT EXISTS one_pending_request ON runtime_requests(run_id) WHERE status='pending';
+      CREATE INDEX IF NOT EXISTS requests_by_thread ON runtime_requests(thread_id,status);
+      CREATE INDEX IF NOT EXISTS item_identity ON events(thread_id,json_extract(payload,'$.id'),sequence) WHERE kind='item';
+      PRAGMA user_version=2;
     `);
   }
   transaction<T>(operation: () => T): T {

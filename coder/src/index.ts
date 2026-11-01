@@ -16,3 +16,19 @@ export {
   sortWorkingThreadsBySend,
 } from "./t3/inbox.ts";
 export { resolveVisibleWorktreeSetup } from "./t3/worktreeSetup.ts";
+
+export type * from "./requestTypes.ts";
+export { RequestBroker } from "./requests.ts";
+export * as userInput from "./t3/pendingUserInput.ts";
+export { derivePendingUserInputProgress } from "./t3/pendingUserInputProgress.ts";
+export {
+  resolveQueuedEditExit,
+  queuedRunEditBlockedReason,
+} from "./t3/queuedRunEdit.ts";
+
+export { startWorkbench } from "./workbench.ts";
+export type {
+  WorkbenchOptions,
+  WorkbenchProfile,
+  WorkbenchProject,
+} from "./workbench.ts";

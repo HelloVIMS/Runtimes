@@ -126,6 +126,56 @@
       "changes": [
         "Original upstream tests copied; test runner/import paths adapted to the local package."
       ]
+    },
+    {
+      "upstream": "packages/client-runtime/src/state/pendingUserInput.ts",
+      "gitBlob": "1c71cdb29b4df3e00c03a6269dbbee0001ab8ef4",
+      "sourceSha256": "57c009c3850a1e0d90ffddb7db2190a945de5d3a9666b35ac57617475e95ba5d",
+      "destination": "src/t3/pendingUserInput.ts",
+      "adaptedSha256": "cd4d9f86af7cabb2982518b5a6340ece087233e611c12085542ff5c9720c050c",
+      "changes": [
+        "Full answer normalization and choice-handling implementation copied unchanged."
+      ]
+    },
+    {
+      "upstream": "packages/client-runtime/src/state/pendingUserInput.test.ts",
+      "gitBlob": "7f5a2b0b84c3d07ad9dcc2d52956a93d5d2bac0f",
+      "sourceSha256": "a2aa6c87d76360a6ccaace7462b22b451cf5f1a40de83541a3416cde0f6b2804",
+      "destination": "test/t3/pendingUserInput.test.ts",
+      "adaptedSha256": "084d3681014547ff39b01ff120100ad2fe824fb32928962baac31dd78504980c",
+      "changes": [
+        "Copied upstream test file; only runner/import paths changed."
+      ]
+    },
+    {
+      "upstream": "packages/client-runtime/src/queuedRunEdit.ts",
+      "gitBlob": "f23c673b6dc6a99185fbaddc720addc8ba29fee8",
+      "sourceSha256": "27773333b341af22d1a4ff0f08b540c23101e46ae64af40a13ab7037e2321a9c",
+      "destination": "src/t3/queuedRunEdit.ts",
+      "adaptedSha256": "88efc7befa03540125c2feba5f6242c3a918b1eae67da48b6fb84354df071e05",
+      "changes": [
+        "Extracted resolveQueuedEditExit and queuedRunEditBlockedReason unchanged; Effect reactive store not copied."
+      ]
+    },
+    {
+      "upstream": "apps/server/src/orchestration-v2/ThreadForkService.ts",
+      "gitBlob": "4717daf75e30c47bb333d8f61876669a0f9c0d2b",
+      "sourceSha256": "9241d3ebb9c6ff600c4ab24a72f12d6542d15608a7a4471b90a487acf86f1f5f",
+      "destination": "src/t3/forkPolicy.ts",
+      "adaptedSha256": "6c9315d09f40d8cb94783d52646145128005dc551b7d43ac2603af5d6f7a2801",
+      "changes": [
+        "Extracted source-status predicate and error formatter; VIMS maps its approval-waiting state to non-forkable and additionally requires a recorded checkpoint. Full Effect fork service not ported."
+      ]
+    },
+    {
+      "upstream": "apps/web/src/pendingUserInput.ts",
+      "gitBlob": "17998eaf8010ceab45b1bbf58276791fdcaef385",
+      "sourceSha256": "009709633cec5083d47c569201e39ecab5ae5be984982f0f3194350e73866e60",
+      "destination": "src/t3/pendingUserInputProgress.ts",
+      "adaptedSha256": "523ad02791dbdacb85bdf0aafbc90efed28e168ae271656b9368ff131a49c475",
+      "changes": [
+        "Extracted question-progress and displaced-draft helpers; local question/import types. Thread chip/link projection is excluded."
+      ]
     }
   ],
   "licenseSha256": "935d8f2af0c703f9c39517ee57cc4930b19d02d533be930b63f0e82f93614b43"

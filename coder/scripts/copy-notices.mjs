@@ -8,3 +8,6 @@ fs.copyFileSync(
   "dist/third-party/t3-provenance.json",
 );
 console.log("Distribution includes original T3 MIT notice and provenance.");
+
+fs.cpSync("web", "dist/workbench", { recursive: true });
+console.log("Native workbench browser assets copied.");

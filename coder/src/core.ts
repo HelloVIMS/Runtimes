@@ -1,3 +1,12 @@
+import { RequestBroker } from "./requests.ts";
+import type { RuntimeResponseInput } from "./requestTypes.ts";
+import { collectHistory, historyRows } from "./history.ts";
+import type { HistorySource } from "./types.ts";
+import { queuedRunEditBlockedReason } from "./t3/queuedRunEdit.ts";
+import {
+  isForkableSourceRunStatus,
+  forkableSourceRunStatusError,
+} from "./t3/forkPolicy.ts";
 import { randomUUID } from "node:crypto";
 import path from "node:path";
 import { Store, identifier, text } from "./store.ts";
@@ -33,12 +42,13 @@ import type {
   StoredItem,
   Thread,
 } from "./types.ts";
-const active = new Set(["preparing", "running", "cancel_requested"]);
+const active = new Set(["preparing", "running", "blocked", "cancel_requested"]);
 const now = () => new Date().toISOString();
 /** A local VIMS composition layer. T3 supplies copied algorithms, not a running service. */
 export class CoderCore {
   readonly store: Store;
   readonly workspaces: Workspaces;
+  readonly requests: RequestBroker;
   private drivers = new Map<string, NativeDriver>();
   private controllers = new Map<string, AbortController>();
   constructor(
@@ -64,6 +74,7 @@ export class CoderCore {
       this.drivers.set(driver.id, driver);
     }
     this.store = new Store(path.resolve(stateDirectory));
+    this.requests = new RequestBroker(this.store);
   }
   async createThread(
     commandId: string,
@@ -125,6 +136,7 @@ export class CoderCore {
           prompt: value.prompt,
           status: "waiting",
           approved: false,
+          revision: 1,
           automaticCompletion: value.automaticCompletion,
           createdAt: at,
           startedAt: null,
@@ -151,18 +163,164 @@ export class CoderCore {
     );
   }
   /** Host must authenticate the human and show the exact task/model before calling. */
-  approve(commandId: string, runId: string): Run {
+  approve(commandId: string, runId: string, expectedRevision?: number): Run {
     return this.store.command(
       commandId,
-      { type: "run.approve", runId: identifier(runId) },
+      { type: "run.approve", runId: identifier(runId), expectedRevision },
       () => {
         const run = this.store.run(runId);
         if (run.status !== "waiting")
           throw new Error("only a waiting submission can be approved");
+        if (
+          expectedRevision !== undefined &&
+          (!Number.isSafeInteger(expectedRevision) ||
+            expectedRevision !== (run.revision ?? 1))
+        )
+          throw new Error("task changed since review; reload before approving");
         const updated: Run = { ...run, approved: true, status: "queued" };
         this.store.putRun(updated);
         this.store.event(run.threadId, runId, "run.approved", { runId });
         return updated;
+      },
+    );
+  }
+  /** Editing invalidates earlier approval and updates the user item projection, not its audit history. */
+  editQueued(
+    commandId: string,
+    runId: string,
+    expectedRevision: number,
+    input: { prompt: string; driverId?: string; model?: string },
+  ): Run {
+    identifier(runId);
+    text(input.prompt, "prompt", 32768);
+    if (input.driverId !== undefined) identifier(input.driverId);
+    if (input.model !== undefined) text(input.model, "model", 256);
+    if (!Number.isSafeInteger(expectedRevision) || expectedRevision < 1)
+      throw new Error("invalid task revision");
+    return this.store.command(
+      commandId,
+      { type: "run.edit", runId, expectedRevision, input },
+      () => {
+        const run = this.store.run(runId);
+        if (!["waiting", "queued"].includes(run.status))
+          throw new Error("task has left the editable queue");
+        if ((run.revision ?? 1) !== expectedRevision)
+          throw new Error("task changed since edit began");
+        const reason = queuedRunEditBlockedReason({
+          openQuestionCount: this.requests.pending(run.threadId).length,
+        });
+        if (reason) throw new Error(reason);
+        const driverId = input.driverId ?? run.providerInstanceId;
+        if (!this.drivers.has(driverId))
+          throw new Error("driver is not registered");
+        const updated: Run = {
+          ...run,
+          prompt: input.prompt,
+          providerInstanceId: driverId,
+          modelSelection: {
+            instanceId: driverId,
+            model: input.model ?? run.modelSelection.model,
+          },
+          revision: expectedRevision + 1,
+          status: "waiting",
+          approved: false,
+        };
+        this.store.putRun(updated);
+        this.store.putThread({
+          ...this.store.thread(run.threadId),
+          updatedAt: now(),
+        });
+        this.store.event(run.threadId, run.id, "run.edited", {
+          revision: updated.revision,
+          approvalRevoked: true,
+        });
+        this.store.event(run.threadId, run.id, "item", {
+          id: run.userMessageId,
+          threadId: run.threadId,
+          runId: run.id,
+          providerThreadId: driverId,
+          status: "completed",
+          type: "user_message",
+          text: updated.prompt,
+        } satisfies StoredItem);
+        return updated;
+      },
+    );
+  }
+  respond(
+    commandId: string,
+    requestId: string,
+    digest: string,
+    input: RuntimeResponseInput,
+  ) {
+    return this.requests.respond(commandId, requestId, digest, input);
+  }
+  /** Non-destructive checkpoint recovery: branch into a new owned worktree; never rewind the original. */
+  async forkThread(
+    commandId: string,
+    input: { runId: string; phase: "before" | "after"; title: string },
+  ): Promise<Thread> {
+    identifier(input.runId);
+    text(input.title, "fork title", 256);
+    if (input.phase !== "before" && input.phase !== "after")
+      throw new Error("invalid checkpoint phase");
+    const run = this.store.run(input.runId);
+    const source = this.store.thread(run.threadId);
+    const mapped = run.status === "waiting" ? "awaiting_approval" : run.status;
+    if (!isForkableSourceRunStatus(mapped) || !run.startedAt)
+      throw new Error(forkableSourceRunStatusError({ ...run, status: mapped }));
+    const checkpoint = run[input.phase];
+    if (!checkpoint)
+      throw new Error("source run has no recorded checkpoint for this phase");
+    await this.workspaces.checkpoint(source, run.id, input.phase, checkpoint);
+    return this.store.command(
+      commandId,
+      { type: "thread.fork", ...input },
+      () => {
+        const current = this.store.run(run.id);
+        if (current[input.phase] !== checkpoint || active.has(current.status))
+          throw new Error("source checkpoint changed while forking");
+        const throughSequence = Number(
+          this.store.db
+            .prepare(
+              "SELECT COALESCE(MAX(sequence),0) AS sequence FROM events WHERE thread_id=?",
+            )
+            .get(source.id)!.sequence,
+        );
+        const sources: HistorySource[] = [
+          ...(source.forkedFrom?.sources ?? []),
+          {
+            threadId: source.id,
+            throughSequence,
+            maxOrdinal: run.ordinal - (input.phase === "before" ? 1 : 0),
+          },
+        ];
+        if (
+          sources.length > 16 ||
+          new Set(sources.map((s) => s.threadId)).size !== sources.length
+        )
+          throw new Error("fork lineage limit exceeded");
+        const at = now();
+        const child: Thread = {
+          id: randomUUID(),
+          title: input.title,
+          repository: source.repository,
+          baseRef: checkpoint,
+          worktree: null,
+          createdAt: at,
+          updatedAt: at,
+          forkedFrom: {
+            threadId: source.id,
+            runId: run.id,
+            phase: input.phase,
+            checkpoint,
+            sources,
+          },
+        };
+        this.store.putThread(child);
+        this.store.event(child.id, null, "thread.created", child);
+        this.store.event(child.id, null, "thread.forked", child.forkedFrom);
+        return child;
       },
     );
   }
@@ -205,6 +363,7 @@ export class CoderCore {
             "queued",
             "preparing",
             "running",
+            "blocked",
             "cancel_requested",
           ].includes(run.status)
         )
@@ -218,6 +377,7 @@ export class CoderCore {
           completedAt: status === "cancelled" ? now() : null,
         };
         this.store.putRun(updated);
+        this.requests.cancelRun(runId);
         this.store.event(run.threadId, runId, "run.cancel-requested", {
           status,
         });
@@ -250,6 +410,7 @@ export class CoderCore {
             "Executor stopped; side effects may have happened. Review before submitting a new run.",
         };
         this.store.putRun(updated);
+        this.requests.cancelRun(runId);
         this.store.event(run.threadId, runId, "run.interrupted", {
           error: updated.error,
         });
@@ -257,11 +418,10 @@ export class CoderCore {
       },
     );
   }
-  private claim(threadId: string): Run | null {
-    return this.store.transaction(() => {
+  private claim(threadId: string, transactional = true): Run | null {
+    const operation = () => {
       const runs = this.store.runs(threadId);
       if (runs.some((run) => active.has(run.status))) return null;
-      // Directly copied T3 priority/queue-position/ordinal ordering.
       const ordered = queuedRunsInDeliveryOrder({
         runs,
         messages: runs.map((run) => ({
@@ -271,60 +431,36 @@ export class CoderCore {
       });
       const first = ordered[0];
       if (!first) return null;
-      const run = runs.find((candidate) => candidate.id === first.id)!;
+      const run = runs.find((run) => run.id === first.id)!;
       if (!run.approved)
         throw new Error("unapproved run reached executable queue");
       const claimed: Run = { ...run, status: "preparing", startedAt: now() };
       this.store.putRun(claimed);
       this.store.event(threadId, run.id, "run.claimed", { runId: run.id });
       return claimed;
-    });
+    };
+    return transactional ? this.store.transaction(operation) : operation();
+  }
+  historySources(
+    threadId: string,
+    beforeOrdinal = Number.MAX_SAFE_INTEGER,
+  ): HistorySource[] {
+    const thread = this.store.thread(threadId);
+    const sources = thread.forkedFrom?.sources ?? [];
+    return [
+      ...sources,
+      {
+        threadId,
+        throughSequence: Number.MAX_SAFE_INTEGER,
+        maxOrdinal: beforeOrdinal - 1,
+      },
+    ];
   }
   private priorItems(run: Run): { items: StoredItem[]; omitted: number } {
-    const allowed = new Set(
-      this.store
-        .runs(run.threadId)
-        .filter(
-          (prior) => prior.ordinal < run.ordinal && prior.startedAt !== null,
-        )
-        .map((prior) => prior.id),
+    return collectHistory(
+      this.store,
+      this.historySources(run.threadId, run.ordinal),
     );
-    // Bound memory while preserving the original user constraint and recent activity.
-    const rows = this.store.db
-      .prepare(
-        "SELECT e.payload FROM events e JOIN runs r ON e.run_id=r.id WHERE e.thread_id=? AND e.kind='item' AND r.ordinal<? AND json_extract(r.body,'$.startedAt') IS NOT NULL ORDER BY e.sequence DESC LIMIT 2001",
-      )
-      .all(run.threadId, run.ordinal);
-    const recent = rows
-      .map((row) => JSON.parse(String(row.payload)) as StoredItem)
-      .filter((item) => item.runId !== null && allowed.has(item.runId))
-      .reverse();
-    const firstRow = this.store.db
-      .prepare(
-        "SELECT payload FROM events WHERE thread_id=? AND kind='item' ORDER BY sequence LIMIT 1",
-      )
-      .get(run.threadId);
-    const first = firstRow
-      ? (JSON.parse(String(firstRow.payload)) as StoredItem)
-      : null;
-    if (
-      first &&
-      first.runId !== null &&
-      allowed.has(first.runId) &&
-      !recent.some((item) => item.id === first.id)
-    )
-      recent.unshift(first);
-    const totalRows = this.store.db
-      .prepare(
-        "SELECT run_id,COUNT(*) AS count FROM events WHERE thread_id=? AND kind='item' GROUP BY run_id",
-      )
-      .all(run.threadId);
-    const total = totalRows.reduce(
-      (sum, row) =>
-        sum + (allowed.has(String(row.run_id)) ? Number(row.count) : 0),
-      0,
-    );
-    return { items: recent, omitted: Math.max(0, total - recent.length) };
   }
   buildHandoff(runId: string) {
     const run = this.store.run(runId);
@@ -352,11 +488,17 @@ export class CoderCore {
       nativeContextEstimate: 0,
       modelContextWindow: driver.contextWindow,
     });
-    const coverage = handoffCoverage({
+    let coverage = handoffCoverage({
       threadId: run.threadId,
       coveredRunOrdinals: { from: 1, to: run.ordinal - 1 },
       items: prior.items,
     });
+    const lineage = this.store.thread(run.threadId).forkedFrom;
+    if (lineage)
+      coverage +=
+        "\nThis thread branched from a fixed checkpoint. Earlier material retains its source thread/item IDs; do not infer later parent work. Snapshot sources: " +
+        JSON.stringify(lineage.sources) +
+        ". Retrieve source history with vims_thread_read using throughSequence and maxOrdinal from these bounds.";
     const selected = selectHistory({
       messages,
       coverage,
@@ -369,12 +511,60 @@ export class CoderCore {
       );
     return { ...selected, budget };
   }
-  async executeNext(threadId: string): Promise<Run | null> {
+  /** Synchronous durable admission lets HTTP callers distinguish rejection from accepted work. */
+  dispatchNext(
+    threadId: string,
+    commandId: string,
+  ): {
+    runId: string | null;
+    admitted: boolean;
+    completion: Promise<Run | null>;
+  } {
+    this.store.thread(threadId);
+    let admitted = false;
+    const claimed = this.store.command(
+      commandId,
+      { type: "run.execute", threadId },
+      () => {
+        admitted = true;
+        return this.claim(threadId, false);
+      },
+    );
+    if (!claimed)
+      return {
+        runId: null,
+        admitted: false,
+        completion: Promise.resolve(null),
+      };
+    return {
+      runId: claimed.id,
+      admitted,
+      completion: admitted
+        ? this.executeClaimed(claimed)
+        : Promise.resolve(this.store.run(claimed.id)),
+    };
+  }
+  async executeNext(threadId: string, commandId?: string): Promise<Run | null> {
+    if (commandId !== undefined)
+      return this.dispatchNext(threadId, commandId).completion;
     this.store.thread(threadId);
     const claimed = this.claim(threadId);
-    if (!claimed) return null;
+    return claimed ? this.executeClaimed(claimed) : null;
+  }
+  private async executeClaimed(claimed: Run): Promise<Run> {
+    const threadId = claimed.threadId;
     const controller = new AbortController();
     this.controllers.set(claimed.id, controller);
+    // A different authenticated control surface can cancel using the same durable DB.
+    const cancellationPoll = setInterval(() => {
+      const current = this.store.run(claimed.id);
+      if (
+        current.status === "cancel_requested" ||
+        current.status === "interrupted"
+      )
+        controller.abort(new Error("durable cancellation/recovery requested"));
+    }, 40);
+    cancellationPoll.unref();
     let produced = 0;
     let itemCount = 0;
     let failed: string | null = null;
@@ -424,13 +614,19 @@ export class CoderCore {
           prompt: claimed.prompt,
           history: handoff.messages,
           historyContext: handoff.context,
+          request: (spec, timeoutMs) =>
+            this.requests.ask(claimed.id, spec, controller.signal, timeoutMs),
         },
         (item: DriverItem) => {
           controller.signal.throwIfAborted();
           const data = JSON.stringify(item);
           produced += Buffer.byteLength(data);
           itemCount++;
-          if (produced > 1024 * 1024 || itemCount > 2000)
+          if (
+            Buffer.byteLength(data) > 256 * 1024 ||
+            produced > 1024 * 1024 ||
+            itemCount > 2000
+          )
             throw new Error("driver event budget exceeded");
           if (
             ![
@@ -471,14 +667,18 @@ export class CoderCore {
             failed ??
             `checkpoint capture failed: ${error instanceof Error ? error.message : "unknown error"}`;
         }
+      clearInterval(cancellationPoll);
       this.store.transaction(() => {
+        this.requests.cancelRun(claimed.id);
         const current = this.store.run(claimed.id);
         const status =
-          controller.signal.aborted || current.status === "cancel_requested"
-            ? "cancelled"
-            : failed
-              ? "failed"
-              : "completed";
+          current.status === "interrupted"
+            ? "interrupted"
+            : controller.signal.aborted || current.status === "cancel_requested"
+              ? "cancelled"
+              : failed
+                ? "failed"
+                : "completed";
         const updated: Run = {
           ...current,
           status,
@@ -520,6 +720,8 @@ export class CoderCore {
     maxCharsPerItem?: number;
     itemId?: string;
     textOffset?: number;
+    throughSequence?: number;
+    maxOrdinal?: number;
   }) {
     this.store.thread(input.threadId);
     const max = input.maxCharsPerItem ?? 4000;
@@ -535,21 +737,24 @@ export class CoderCore {
     if (!Number.isSafeInteger(after) || after < 0)
       throw new Error("invalid item cursor");
     if (input.itemId !== undefined) identifier(input.itemId);
-    const rows = input.itemId
-      ? this.store.db
-          .prepare(
-            "SELECT sequence,payload FROM events WHERE thread_id=? AND kind='item' AND json_extract(payload,'$.id')=? ORDER BY sequence LIMIT 1",
-          )
-          .all(input.threadId, input.itemId)
-      : this.store.db
-          .prepare(
-            "SELECT sequence,payload FROM events WHERE thread_id=? AND kind='item' AND sequence>? ORDER BY sequence LIMIT ?",
-          )
-          .all(input.threadId, after, limit + 1);
-    const matching = rows.map((row) => ({
-      position: Number(row.sequence),
-      item: JSON.parse(String(row.payload)) as StoredItem,
-    }));
+    const throughSequence = input.throughSequence ?? Number.MAX_SAFE_INTEGER;
+    const maxOrdinal = input.maxOrdinal ?? Number.MAX_SAFE_INTEGER;
+    if (
+      !Number.isSafeInteger(throughSequence) ||
+      throughSequence < 0 ||
+      !Number.isSafeInteger(maxOrdinal) ||
+      maxOrdinal < 0
+    )
+      throw new Error("invalid snapshot bounds");
+    const matching = historyRows(
+      this.store,
+      { threadId: input.threadId, throughSequence, maxOrdinal },
+      {
+        after: input.itemId ? 0 : after,
+        itemId: input.itemId,
+        limit: input.itemId ? 1 : limit + 1,
+      },
+    );
     const selected = matching.slice(0, limit);
     const items = selected.map(({ position, item }) => {
       const full = historicalMessage(item)?.text ?? "";
@@ -642,8 +847,14 @@ export class CoderCore {
         environmentId: "vims-local",
         createdAt: thread.createdAt,
         unsettledAt: thread.updatedAt,
-        hasPendingApprovals: runs.some((run) => run.status === "waiting"),
-        hasPendingUserInput: false,
+        hasPendingApprovals:
+          runs.some((run) => run.status === "waiting") ||
+          this.requests
+            .pending(thread.id)
+            .some((request) => request.spec.kind === "approval"),
+        hasPendingUserInput: this.requests
+          .pending(thread.id)
+          .some((request) => request.spec.kind === "questions"),
         hasActionableProposedPlan: false,
         interactionMode: "execute",
         latestRun: latest

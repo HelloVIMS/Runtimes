@@ -114,9 +114,10 @@ release tag. Build provenance is recorded in each release's notes (CI run
 URL + timestamp). 
 
 ## Native VIMS coding-core adoption candidate
-[`coder/`](coder/README.md) is a separate, opt-in source-adoption package. It copies
-MIT-licensed T3 algorithms into VIMS-local code and composes them with native task
-persistence, Git worktrees/checkpoints and direct provider execution. **No T3 app,
-CLI or service is required.** It is not part of the existing eight-shell release
-matrix and is not wired into the private desktop application. See its README for
-actual copied components, validation and remaining host-integration boundaries.
+[`coder/`](coder/README.md) is a separate opt-in package that copies MIT-licensed
+T3 implementation into VIMS-local code: task persistence, isolated Git worktrees,
+portable context, runtime human input, editable approval-gated queues, checkpoint
+branching and an authenticated loopback-only workbench. No T3 app/CLI/service is
+required. It is not part of the eight-shell release matrix or wired into the private
+desktop application. Its README separates passing native/API tests from outstanding
+browser/provider/desktop acceptance. See `coder/CHANGELOG.md` for the extension.
